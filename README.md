@@ -25,6 +25,9 @@
 ## B站演示视频：
 [演示视频](https://b23.tv/bGXyhjU)
 
+## ⭐ Star History
+[![Star History Chart](https://api.star-history.com/svg?repos=via007/bilibili-rag&type=Date)](https://star-history.com/#via007/bilibili-rag&Date)
+
 ---
 
 ## ⚡ 快速开始（3 步）
