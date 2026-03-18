@@ -60,3 +60,5 @@ logs/
 node_modules/
 package-lock.json
 frontend/package-lock.json
+frontend/.next/
+.next/

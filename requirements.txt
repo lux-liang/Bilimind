@@ -15,6 +15,9 @@ chromadb==0.5.15
 openai==1.59.7
 dashscope==1.20.0
 
+# Knowledge graph
+networkx>=3.2
+
 # QR code
 qrcode[pil]==7.4.2
 
