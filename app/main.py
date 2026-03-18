@@ -1,5 +1,5 @@
 """
-Bilibili RAG 知识库系统
+BiliMind 知识树学习导航系统
 
 主应用入口
 """
@@ -12,6 +12,9 @@ import sys
 from app.config import settings, ensure_directories
 from app.database import init_db
 from app.routers import auth, favorites, knowledge, chat
+from app.routers import tree
+from app.routers import search
+from app.routers import learning_path
 
 
 # 配置日志
@@ -33,39 +36,40 @@ logger.add(
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时
-    logger.info("🚀 Bilibili RAG 知识库系统启动中...")
+    logger.info("BiliMind 知识树学习导航系统启动中...")
     ensure_directories()
     await init_db()
-    logger.info("✅ 数据库初始化完成")
+    logger.info("数据库初始化完成")
     
     yield
     
     # 关闭时
-    logger.info("👋 应用关闭")
+    logger.info("应用关闭")
 
 
 # 创建 FastAPI 应用
 app = FastAPI(
-    title="Bilibili RAG 知识库系统",
+    title="BiliMind 知识树学习导航系统",
     description="""
 ## 项目简介
 
-将你的 B站收藏夹变成可对话的知识库！
+基于 B站收藏视频自动构建的个人知识树与学习导航系统。
 
-### 功能特性
+### 核心功能
 
-- 🔐 **B站扫码登录** - 安全便捷
-- 📁 **收藏夹管理** - 查看和选择收藏夹
-- 🤖 **AI 内容提取** - 自动获取视频摘要/字幕
-- 💬 **智能问答** - 基于收藏内容回答问题
-- 🔍 **语义搜索** - 快速找到相关视频
+- **知识树** - 自动从视频内容抽取知识点并构建知识树
+- **节点详情** - 查看知识点定义、前置/后续、相关视频片段
+- **视频详情** - 查看视频知识点时间线，可追溯到具体秒数
+- **学习路径** - 基于图结构推荐学习顺序
+- **智能问答** - 基于知识图谱 + 向量检索的辅助问答
+- **收藏夹同步** - B站扫码登录，自动同步收藏夹内容
 
 ### 技术栈
 
-- FastAPI + LangChain + ChromaDB
+- FastAPI + LangChain + ChromaDB + networkx
 - B站 API (非官方)
     """,
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan
 )
 
@@ -85,14 +89,17 @@ app.include_router(auth.router)
 app.include_router(favorites.router)
 app.include_router(knowledge.router)
 app.include_router(chat.router)
+app.include_router(tree.router)
+app.include_router(search.router)
+app.include_router(learning_path.router)
 
 
 @app.get("/")
 async def root():
     """API 根路径"""
     return {
-        "message": "🎬 Bilibili RAG 知识库系统",
-        "version": "0.1.0",
+        "message": "BiliMind 知识树学习导航系统",
+        "version": "0.2.0",
         "docs": "/docs",
         "status": "running"
     }
