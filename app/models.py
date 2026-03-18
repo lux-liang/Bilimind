@@ -1,9 +1,9 @@
 """
-Bilibili RAG 知识库系统
+BiliMind 知识树学习导航系统
 
 数据模型定义
 """
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, JSON
+from sqlalchemy import Column, Integer, Float, String, Text, DateTime, Boolean, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
@@ -37,11 +37,17 @@ class VideoCache(Base):
     # 元信息
     duration = Column(Integer, nullable=True)  # 视频时长（秒）
     pic_url = Column(String(500), nullable=True)  # 封面URL
-    
+    tags = Column(JSON, nullable=True)  # B站标签列表
+
+    # LLM 生成
+    summary = Column(Text, nullable=True)  # LLM 生成的视频摘要
+
     # 处理状态
     is_processed = Column(Boolean, default=False)  # 是否已处理并加入向量库
     process_error = Column(Text, nullable=True)  # 处理错误信息
-    
+    extraction_status = Column(String(20), default='pending')  # pending/done/failed
+    knowledge_node_count = Column(Integer, default=0)  # 关联知识点数量
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -100,8 +106,74 @@ class FavoriteVideo(Base):
     
     # 是否选中（用户可以取消选中某些视频）
     is_selected = Column(Boolean, default=True)
-    
+
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ==================== 知识树新增模型 ====================
+
+class Segment(Base):
+    """视频片段表 — 带时间戳的文本片段"""
+    __tablename__ = 'segments'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    video_bvid = Column(String(20), index=True, nullable=False)
+    segment_index = Column(Integer, nullable=False)
+    start_time = Column(Float, nullable=True)   # 开始时间(秒)
+    end_time = Column(Float, nullable=True)     # 结束时间(秒)
+    raw_text = Column(Text, nullable=False)
+    cleaned_text = Column(Text, nullable=True)
+    summary = Column(Text, nullable=True)
+    source_type = Column(String(20), nullable=True)  # subtitle / asr / basic
+    confidence = Column(Float, default=1.0)
+    extraction_status = Column(String(20), default='pending')  # pending/done/failed
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class KnowledgeNode(Base):
+    """知识节点表"""
+    __tablename__ = 'knowledge_nodes'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    node_type = Column(String(20), nullable=False)       # topic/concept/method/tool/task
+    name = Column(String(200), nullable=False)
+    normalized_name = Column(String(200), index=True)
+    aliases = Column(JSON, default=list)
+    definition = Column(Text, nullable=True)
+    difficulty = Column(Integer, default=1)              # 1-5
+    main_topic_id = Column(Integer, nullable=True)       # 主归属 topic 的 node_id
+    confidence = Column(Float, default=0.5)
+    source_count = Column(Integer, default=1)
+    review_status = Column(String(20), default='auto')   # auto/approved/rejected/pending_review
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class KnowledgeEdge(Base):
+    """知识关系表"""
+    __tablename__ = 'knowledge_edges'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_node_id = Column(Integer, index=True, nullable=False)
+    target_node_id = Column(Integer, index=True, nullable=False)
+    relation_type = Column(String(30), nullable=False)   # prerequisite_of/part_of/related_to/explains/supports/mentions
+    weight = Column(Float, default=1.0)
+    confidence = Column(Float, default=0.5)
+    evidence_segment_id = Column(Integer, nullable=True)
+    evidence_video_bvid = Column(String(20), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class NodeSegmentLink(Base):
+    """知识节点-片段关联表"""
+    __tablename__ = 'node_segment_links'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    node_id = Column(Integer, index=True, nullable=False)
+    segment_id = Column(Integer, index=True, nullable=False)
+    video_bvid = Column(String(20), index=True)
+    relation = Column(String(20), default='mentions')    # mentions/explains/demonstrates
+    confidence = Column(Float, default=0.5)
 
 
 # ==================== Pydantic 模型 (API 用) ====================
@@ -112,6 +184,35 @@ class ContentSource(str, Enum):
     SUBTITLE = "subtitle"
     BASIC_INFO = "basic_info"
     ASR = "asr"
+
+
+class NodeType(str, Enum):
+    """知识节点类型"""
+    TOPIC = "topic"
+    CONCEPT = "concept"
+    METHOD = "method"
+    TOOL = "tool"
+    TASK = "task"
+
+
+class RelationType(str, Enum):
+    """知识关系类型"""
+    PREREQUISITE_OF = "prerequisite_of"
+    PART_OF = "part_of"
+    RELATED_TO = "related_to"
+    EXPLAINS = "explains"
+    SUPPORTS = "supports"
+    MENTIONS = "mentions"
+    RECOMMENDS_NEXT = "recommends_next"
+    VIDEO_FOR = "video_for"
+
+
+class ReviewStatus(str, Enum):
+    """审核状态"""
+    AUTO = "auto"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    PENDING_REVIEW = "pending_review"
 
 
 class VideoInfo(BaseModel):
@@ -170,3 +271,129 @@ class ChatResponse(BaseModel):
     """对话响应"""
     answer: str
     sources: list[dict]  # 来源视频列表
+
+
+# ==================== 知识树 API 模型 ====================
+
+class SegmentInfo(BaseModel):
+    """片段信息"""
+    id: int
+    video_bvid: str
+    segment_index: int
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+    text: str
+    summary: Optional[str] = None
+    source_type: Optional[str] = None
+
+    @property
+    def time_label(self) -> str:
+        if self.start_time is not None and self.end_time is not None:
+            return f"{_fmt_time(self.start_time)}-{_fmt_time(self.end_time)}"
+        return ""
+
+
+class TreeNodeInfo(BaseModel):
+    """知识树节点"""
+    id: int
+    name: str
+    node_type: str
+    difficulty: int = 1
+    definition: Optional[str] = None
+    video_count: int = 0
+    node_count: int = 0
+    confidence: float = 0.5
+    is_reference: bool = False
+    children: list["TreeNodeInfo"] = []
+
+
+class NodeDetailInfo(BaseModel):
+    """节点详情"""
+    id: int
+    name: str
+    node_type: str
+    definition: Optional[str] = None
+    difficulty: int = 1
+    confidence: float = 0.5
+    source_count: int = 0
+    review_status: str = "auto"
+    aliases: list[str] = []
+    main_topic: Optional[dict] = None
+    related_topics: list[dict] = []
+    prerequisites: list[dict] = []
+    successors: list[dict] = []
+    related_nodes: list[dict] = []
+    videos: list[dict] = []
+    segments: list[dict] = []
+
+
+class VideoDetailInfo(BaseModel):
+    """视频详情"""
+    bvid: str
+    title: str
+    description: Optional[str] = None
+    owner_name: Optional[str] = None
+    duration: Optional[int] = None
+    pic_url: Optional[str] = None
+    summary: Optional[str] = None
+    knowledge_nodes: list[dict] = []
+    segments: list[dict] = []
+    tree_positions: list[dict] = []
+
+
+class DifficultyStage(str, Enum):
+    """难度阶段（前端筛选用）"""
+    BEGINNER = "beginner"      # 入门: difficulty 1-2
+    INTERMEDIATE = "intermediate"  # 进阶: difficulty 3-4
+    ADVANCED = "advanced"      # 实战: difficulty 5
+
+    @classmethod
+    def difficulty_range(cls, stage: "DifficultyStage") -> tuple[int, int]:
+        return {
+            cls.BEGINNER: (1, 2),
+            cls.INTERMEDIATE: (3, 4),
+            cls.ADVANCED: (5, 5),
+        }[stage]
+
+
+class LearningPathStepInfo(BaseModel):
+    """学习路径步骤"""
+    order: int
+    node_id: int
+    name: str
+    node_type: str
+    difficulty: int = 1
+    definition: Optional[str] = None
+    confidence: float = 0.5
+    reason: str = ""
+    is_optional: bool = False
+    has_videos: bool = False
+    video_count: int = 0
+    videos: list[dict] = []
+
+
+class LearningPathInfo(BaseModel):
+    """学习路径完整信息"""
+    target: dict
+    mode: str
+    steps: list[LearningPathStepInfo] = []
+    total_steps: int = 0
+    estimated_videos: int = 0
+
+
+class ChatEvidenceInfo(BaseModel):
+    """问答证据信息 — 增强版，含图谱节点和片段追溯"""
+    answer: str
+    sources: list[dict] = []
+    related_nodes: list[dict] = []
+    related_segments: list[dict] = []
+    route_type: str = "vector"  # vector / graph / path / hybrid
+
+
+def _fmt_time(seconds: float) -> str:
+    """格式化秒为 MM:SS"""
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"

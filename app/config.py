@@ -1,5 +1,5 @@
 """
-Bilibili RAG 知识库系统
+BiliMind 知识树学习导航系统
 
 核心配置模块
 """
@@ -11,7 +11,7 @@ import os
 
 class Settings(BaseSettings):
     """应用配置"""
-    
+
     # OpenAI / LLM 配置
     openai_api_key: str = Field(
         default="",
@@ -30,24 +30,35 @@ class Settings(BaseSettings):
     asr_timeout: int = Field(default=600, env="ASR_TIMEOUT")
     asr_model_local: str = Field(default="paraformer-realtime-v2", env="ASR_MODEL_LOCAL")
     asr_input_format: str = Field(default="pcm", env="ASR_INPUT_FORMAT")
-    
+
     # 应用配置
     app_host: str = Field(default="0.0.0.0", env="APP_HOST")
     app_port: int = Field(default=8000, env="APP_PORT")
     debug: bool = Field(default=True, env="DEBUG")
-    
+
     # 数据库
     database_url: str = Field(
         default="sqlite+aiosqlite:///./data/bilibili_rag.db",
         env="DATABASE_URL"
     )
-    
+
     # ChromaDB
     chroma_persist_directory: str = Field(
         default="./data/chroma_db",
         env="CHROMA_PERSIST_DIRECTORY"
     )
-    
+
+    # 知识图谱
+    graph_persist_path: str = Field(
+        default="./data/graph.json",
+        env="GRAPH_PERSIST_PATH"
+    )
+
+    # 知识抽取
+    extraction_min_confidence: float = Field(default=0.3, env="EXTRACTION_MIN_CONFIDENCE")
+    tree_min_confidence: float = Field(default=0.4, env="TREE_MIN_CONFIDENCE")
+    extraction_segment_merge_seconds: float = Field(default=30.0, env="EXTRACTION_SEGMENT_MERGE_SECONDS")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
