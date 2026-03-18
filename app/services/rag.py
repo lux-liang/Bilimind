@@ -7,11 +7,11 @@ from typing import List, Optional
 from loguru import logger
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_chroma import Chroma
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.schema import Document
-from langchain.prompts import ChatPromptTemplate
-from langchain.schema.runnable import RunnablePassthrough
-from langchain.schema.output_parser import StrOutputParser
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 from app.config import settings
 from app.models import VideoContent
 
@@ -35,28 +35,56 @@ class RAGService:
         """
         self.collection_name = collection_name
         
-        # 初始化 Embeddings (使用 DashScope 原生支持)
+        # 初始化 Embeddings — 三级降级策略
+        self.embeddings = None
+
+        # 1) 尝试 DashScope
         try:
             from langchain_community.embeddings import DashScopeEmbeddings
             self.embeddings = DashScopeEmbeddings(
                 dashscope_api_key=settings.openai_api_key,
                 model=settings.embedding_model
             )
+            # 快速验证是否可用
+            self.embeddings.embed_query("test")
             logger.info("使用 DashScopeEmbeddings 初始化成功")
-        except ImportError:
-            self.embeddings = OpenAIEmbeddings(
-                api_key=settings.openai_api_key,
-                base_url=settings.openai_base_url,
-                model=settings.embedding_model,
-                check_embedding_ctx_length=False
-            )
+        except Exception as e:
+            logger.info(f"DashScopeEmbeddings 不可用: {e}")
+            self.embeddings = None
+
+        # 2) 尝试 OpenAI 兼容接口
+        if self.embeddings is None:
+            try:
+                self.embeddings = OpenAIEmbeddings(
+                    api_key=settings.openai_api_key,
+                    base_url=settings.openai_base_url,
+                    model=settings.embedding_model,
+                    check_embedding_ctx_length=False
+                )
+                self.embeddings.embed_query("test")
+                logger.info("使用 OpenAIEmbeddings 初始化成功")
+            except Exception as e:
+                logger.info(f"OpenAIEmbeddings 不可用: {e}")
+                self.embeddings = None
+
+        # 3) Fallback: 本地 sentence-transformers (ChromaDB 默认)
+        if self.embeddings is None:
+            try:
+                from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+                logger.info("使用 ChromaDB 默认本地 Embedding (all-MiniLM-L6-v2)")
+            except Exception:
+                pass
+            # Chroma 不传 embedding_function 时会自动使用默认模型
+            self.embeddings = None
         
         # 初始化向量存储
-        self.vectorstore = Chroma(
-            collection_name=collection_name,
-            embedding_function=self.embeddings,
-            persist_directory=settings.chroma_persist_directory
-        )
+        chroma_kwargs = {
+            "collection_name": collection_name,
+            "persist_directory": settings.chroma_persist_directory,
+        }
+        if self.embeddings is not None:
+            chroma_kwargs["embedding_function"] = self.embeddings
+        self.vectorstore = Chroma(**chroma_kwargs)
         
         # 初始化 LLM
         self.llm = ChatOpenAI(
