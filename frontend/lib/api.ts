@@ -292,3 +292,247 @@ export const chatApi = {
             { method: "POST" }
         ),
 };
+
+// ==================== 知识树类型 ====================
+
+export interface TreeNode {
+    id: number;
+    name: string;
+    node_type: string;
+    difficulty: number;
+    definition?: string;
+    video_count: number;
+    node_count: number;
+    confidence: number;
+    is_reference: boolean;
+    children: TreeNode[];
+}
+
+export interface TreeResponse {
+    tree: TreeNode[];
+    stats: {
+        total_topics: number;
+        total_nodes: number;
+        total_edges: number;
+        low_confidence_count: number;
+    };
+}
+
+export interface SegmentRef {
+    id: number;
+    start_time?: number;
+    end_time?: number;
+    text: string;
+    time_label: string;
+}
+
+export interface NodeDetail {
+    id: number;
+    name: string;
+    node_type: string;
+    definition?: string;
+    difficulty: number;
+    confidence: number;
+    source_count: number;
+    review_status: string;
+    aliases: string[];
+    main_topic?: { id: number; name: string };
+    related_topics: Array<{ id: number; name: string }>;
+    prerequisites: Array<{ id: number; name: string; difficulty: number }>;
+    successors: Array<{ id: number; name: string; difficulty: number }>;
+    related_nodes: Array<{ id: number; name: string; node_type: string }>;
+    videos: Array<{
+        bvid: string;
+        title: string;
+        owner_name?: string;
+        pic_url?: string;
+        duration?: number;
+        url: string;
+        segments: Array<{ start_time?: number; end_time?: number; text: string; time_label: string }>;
+    }>;
+    tree_position: Array<{ id: number; name: string; type: string }>;
+}
+
+export interface VideoDetail {
+    bvid: string;
+    title: string;
+    description?: string;
+    owner_name?: string;
+    duration?: number;
+    pic_url?: string;
+    summary?: string;
+    tags: string[];
+    url: string;
+    knowledge_nodes: Array<{
+        id: number;
+        name: string;
+        node_type: string;
+        difficulty: number;
+        definition?: string;
+        confidence: number;
+        segments: Array<{ start_time?: number; end_time?: number; time_label: string }>;
+        tree_position: Array<{ id: number; name: string; type: string }>;
+    }>;
+    segments: Array<{
+        id: number;
+        segment_index: number;
+        start_time?: number;
+        end_time?: number;
+        text: string;
+        summary?: string;
+        source_type?: string;
+        time_label: string;
+    }>;
+}
+
+export interface TreeStats {
+    total_nodes: number;
+    total_edges: number;
+    total_segments: number;
+    total_topics: number;
+    total_videos: number;
+    pending_review: number;
+}
+
+// ==================== 知识树 API ====================
+
+export const treeApi = {
+    getTree: (opts?: { minConfidence?: number; topicId?: number; stage?: string }) => {
+        const params = new URLSearchParams();
+        if (opts?.minConfidence) params.set("min_confidence", String(opts.minConfidence));
+        if (opts?.topicId) params.set("topic_id", String(opts.topicId));
+        if (opts?.stage) params.set("stage", opts.stage);
+        const qs = params.toString();
+        return request<TreeResponse>(`/tree${qs ? `?${qs}` : ""}`);
+    },
+
+    getTopics: () =>
+        request<Array<{ id: number; name: string; definition?: string; difficulty: number; source_count: number; confidence: number }>>("/tree/topics"),
+
+    getNodeDetail: (nodeId: number) =>
+        request<NodeDetail>(`/tree/node/${nodeId}`),
+
+    getVideoDetail: (bvid: string) =>
+        request<VideoDetail>(`/tree/video/${bvid}`),
+
+    getNodeSegments: (nodeId: number) =>
+        request<Array<SegmentRef & { video_bvid: string; url?: string }>>(`/tree/node/${nodeId}/segments`),
+
+    getStats: () =>
+        request<TreeStats>("/tree/stats"),
+
+    getPending: (limit = 50) =>
+        request<Array<{ id: number; name: string; node_type: string; definition?: string; confidence: number; source_count: number }>>(`/tree/pending?limit=${limit}`),
+
+    reviewNode: (nodeId: number, action: "approve" | "reject") =>
+        request<{ message: string; review_status: string }>(`/tree/node/${nodeId}/review?action=${action}`, { method: "POST" }),
+
+    getLearningPath: (nodeId: number, mode: "beginner" | "standard" | "quick" = "standard", knownIds?: number[]) => {
+        const params = new URLSearchParams({ mode });
+        if (knownIds && knownIds.length > 0) params.set("known", knownIds.join(","));
+        return request<LearningPathResponse>(`/tree/node/${nodeId}/path?${params.toString()}`);
+    },
+};
+
+// ==================== 学习路径类型 ====================
+
+export interface LearningPathStep {
+    order: number;
+    node_id: number;
+    name: string;
+    node_type: string;
+    difficulty: number;
+    definition?: string;
+    confidence: number;
+    reason: string;
+    is_optional: boolean;
+    has_videos: boolean;
+    video_count: number;
+    videos: Array<{
+        bvid: string;
+        title: string;
+        url: string;
+        segments: Array<{ time_label: string; url?: string }>;
+    }>;
+}
+
+export interface LearningPathResponse {
+    target: { id: number; name: string; node_type: string; difficulty: number };
+    mode: string;
+    steps: LearningPathStep[];
+    total_steps: number;
+    estimated_videos: number;
+}
+
+// ==================== 搜索 API ====================
+
+export interface SearchResults {
+    query: string;
+    type: string;
+    nodes: Array<{
+        id: number;
+        name: string;
+        node_type: string;
+        difficulty: number;
+        definition?: string;
+        confidence: number;
+        source_count: number;
+        video_count: number;
+    }>;
+    videos: Array<{
+        bvid: string;
+        title: string;
+        description?: string;
+        owner_name?: string;
+        duration?: number;
+        pic_url?: string;
+        knowledge_node_count: number;
+        url: string;
+    }>;
+    segments: Array<{
+        bvid: string;
+        title: string;
+        content_preview: string;
+        chunk_index?: number;
+        url: string;
+    }>;
+}
+
+export const searchApi = {
+    search: (q: string, type: string = "all", limit: number = 20) =>
+        request<SearchResults>(`/search?q=${encodeURIComponent(q)}&type=${type}&limit=${limit}`),
+};
+
+// ==================== 学习路径独立 API ====================
+
+export interface PopularTopic {
+    id: number;
+    name: string;
+    node_type: string;
+    difficulty: number;
+    definition?: string;
+    source_count: number;
+    video_count: number;
+}
+
+export const learningPathApi = {
+    // 搜索学习目标
+    searchTargets: (q: string, limit = 10) =>
+        request<Array<{ id: number; name: string; node_type: string; difficulty: number; definition?: string; confidence: number; source_count: number }>>(
+            `/learning-path/search?q=${encodeURIComponent(q)}&limit=${limit}`
+        ),
+
+    // 生成学习路径
+    generate: (opts: { target?: string; nodeId?: number; mode?: string; known?: number[] }) => {
+        const params = new URLSearchParams();
+        if (opts.target) params.set("target", opts.target);
+        if (opts.nodeId) params.set("node_id", String(opts.nodeId));
+        if (opts.mode) params.set("mode", opts.mode);
+        if (opts.known && opts.known.length > 0) params.set("known", opts.known.join(","));
+        return request<LearningPathResponse>(`/learning-path/generate?${params.toString()}`);
+    },
+
+    // 获取热门学习目标
+    getPopularTopics: (limit = 20) =>
+        request<PopularTopic[]>(`/learning-path/topics?limit=${limit}`),
+};
