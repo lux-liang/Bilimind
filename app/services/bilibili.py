@@ -499,29 +499,34 @@ class BilibiliService:
 
     async def download_subtitle(self, subtitle_url: str) -> str:
         """
-        下载字幕文件
-        
-        Args:
-            subtitle_url: 字幕 URL
-            
-        Returns:
-            字幕文本
+        下载字幕文件（纯文本，兼容旧接口）
         """
-        # 处理协议
+        items = await self.download_subtitle_with_timestamps(subtitle_url)
+        return "\n".join(item["content"] for item in items if item.get("content"))
+
+    async def download_subtitle_with_timestamps(self, subtitle_url: str) -> list[dict]:
+        """
+        下载字幕文件，保留时间戳信息
+
+        Returns:
+            [{content: str, from: float, to: float}, ...]
+        """
         if subtitle_url.startswith("//"):
             subtitle_url = "https:" + subtitle_url
-        
+
         response = await self.client.get(subtitle_url)
         data = response.json()
-        
-        # 拼接字幕文本
-        texts = []
+
+        items = []
         for item in data.get("body", []):
             content = item.get("content", "")
             if content:
-                texts.append(content)
-        
-        return "\n".join(texts)
+                items.append({
+                    "content": content,
+                    "from": item.get("from", 0.0),
+                    "to": item.get("to", 0.0),
+                })
+        return items
 
     async def download_audio_to_file(self, audio_url: str, file_path: str) -> bool:
         """
