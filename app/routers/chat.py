@@ -1,6 +1,6 @@
 """
-Bilibili RAG 知识库系统
-对话路由 - 智能问答
+BiliMind 知识树学习导航系统
+对话路由 - 智能问答 + 图谱检索增强
 """
 import re
 import json
@@ -11,14 +11,27 @@ from loguru import logger
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from openai import OpenAI
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 from app.database import get_db
-from app.models import ChatRequest, ChatResponse, FavoriteFolder, FavoriteVideo, VideoCache
+from app.models import (
+    ChatRequest, ChatResponse, FavoriteFolder, FavoriteVideo, VideoCache,
+    KnowledgeNode, NodeSegmentLink, Segment, _fmt_time,
+)
 from app.config import settings
-from app.routers.knowledge import get_rag_service
+from app.routers.knowledge import get_rag_service, get_graph
+from app.services.query_router import QueryRouter
 
 router = APIRouter(prefix="/chat", tags=["对话"])
+
+_query_router: Optional[QueryRouter] = None
+
+
+def _get_query_router() -> QueryRouter:
+    global _query_router
+    if _query_router is None:
+        _query_router = QueryRouter()
+    return _query_router
 
 def _get_llm_client() -> OpenAI:
     """获取 LLM 客户端"""
@@ -134,6 +147,47 @@ def _build_db_summary_messages(context: str, question: str) -> list[dict]:
         {"role": "system", "content": system},
         {"role": "user", "content": question},
     ]
+
+
+def _build_graph_messages(context: str, question: str) -> list[dict]:
+    """基于知识图谱上下文回答问题"""
+    system = (
+        "你是一个知识导航助手，擅长解释知识点之间的关系和学习路径。\n"
+        "请基于以下知识图谱信息回答用户的问题。\n"
+        "回答要：\n"
+        "1. 清晰说明知识点之间的关系（前置、从属、相关等）\n"
+        "2. 如果涉及学习路径，给出推荐顺序和理由\n"
+        "3. 引用具体的知识点和视频片段作为证据\n"
+        "4. 结构化呈现，易于理解\n\n"
+        f"知识图谱信息：\n{context}"
+    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": question},
+    ]
+
+
+def _build_path_context(target_node: dict, path_result: dict) -> str:
+    """构建学习路径的 LLM 上下文"""
+    parts = []
+    target_name = target_node.get("name", "")
+    parts.append(f"## 目标知识点: {target_name}")
+    parts.append(f"- 类型: {target_node.get('node_type', '')}")
+    parts.append(f"- 难度: {target_node.get('difficulty', 1)}")
+    if target_node.get("definition"):
+        parts.append(f"- 定义: {target_node['definition']}")
+
+    steps = path_result.get("steps", [])
+    if steps:
+        parts.append(f"\n## 推荐学习路径 ({len(steps)} 步)")
+        for step in steps:
+            optional = " (可选)" if step.get("is_optional") else ""
+            parts.append(
+                f"{step['order']}. [{step.get('node_type', '')}] {step['name']} "
+                f"(难度{step.get('difficulty', 1)}){optional} — {step.get('reason', '')}"
+            )
+
+    return "\n".join(parts)
 
 def _is_list_question(question: str) -> bool:
     """列表/清单类问题"""
@@ -378,9 +432,10 @@ async def _get_video_titles_context(db: AsyncSession, folder_ids: List[int], lim
     return "\n\n".join(context_parts)
 
 async def _prepare_messages(request: ChatRequest, db: AsyncSession) -> tuple[list[dict], List[dict], str]:
-    """准备 LLM 消息与来源信息"""
+    """准备 LLM 消息与来源信息（增强版：接入图谱检索）"""
     question = request.question.strip()
     rag = get_rag_service()
+    query_router = _get_query_router()
     folder_ids = []
     if request.session_id:
         folder_ids = await _get_folder_ids_for_session(db, request.session_id, request.folder_ids)
@@ -391,20 +446,26 @@ async def _prepare_messages(request: ChatRequest, db: AsyncSession) -> tuple[lis
     is_general = _is_general_question(question)
     if request.folder_ids:
         is_collection_intent = True
-    # 1) LLM 路由优先，失败时降级规则路由
-    logger.info(f"路由输入: question={question} folder_ids={folder_ids} has_data={has_data} is_collection_intent={is_collection_intent}")
-    route, route_raw = _route_with_llm(question)
-    route_source = "LLM"
+
+    # 1) QueryRouter 分类
+    route_type = query_router.classify_question(question)
+    logger.info(f"QueryRouter 分类: {route_type} (question={question})")
+
+    # 2) LLM 路由优先（对非 graph/path 类型做二次确认）
+    if route_type in ("vector", "db_list", "db_content"):
+        llm_route, route_raw = _route_with_llm(question)
+        route_source = "LLM"
+        if llm_route:
+            route_type = llm_route
+            logger.info(f"LLM 路由覆盖: {route_source} => {route_type}")
+
     related: Optional[bool] = None
-    if not route:
-        related = await _is_related_to_collection(db, folder_ids, question)
-        route = _route_with_rules(question, is_collection_intent, related)
-        route_source = "RULE"
-    logger.info(f"路由策略: {route_source} => {route}")
+
     # 纠偏
     if is_general:
-        route = "direct"
-    # 2) 无数据时处理
+        route_type = "direct"
+
+    # 3) 无数据时处理
     if not has_data:
         if is_collection_intent:
             context, sources = await _get_video_context(db, folder_ids, include_content=False, limit=50)
@@ -414,13 +475,73 @@ async def _prepare_messages(request: ChatRequest, db: AsyncSession) -> tuple[lis
             return messages, sources, question
         messages = _build_direct_messages(question)
         return messages, [], question
-    # 3) 直接回答
-    if route == "direct":
+
+    # 4) 直接回答
+    if route_type == "direct":
         title_context = await _get_video_titles_context(db, folder_ids, limit=50)
         messages = _build_direct_messages_with_context(title_context, question) if title_context else _build_direct_messages(question)
         return messages, [], question
-    # 4) 列表类问题
-    if route == "db_list":
+
+    # 5) 图谱检索路由 —— 新增
+    if route_type == "graph":
+        graph = get_graph()
+        if graph.node_count() == 0:
+            await graph.load_from_db(db)
+        graph_result = await query_router.execute_graph_search(question, graph, db)
+        context = graph_result.get("context", "")
+        if context:
+            messages = _build_graph_messages(context, question)
+            # 构建来源：从图谱节点关联的视频
+            sources = []
+            seen_bvids = set()
+            for seg in graph_result.get("segments", []):
+                bvid = seg.get("video_bvid", "")
+                if bvid and bvid not in seen_bvids:
+                    seen_bvids.add(bvid)
+                    sources.append({
+                        "bvid": bvid,
+                        "title": "",  # 将在后续填充
+                        "url": f"https://www.bilibili.com/video/{bvid}",
+                    })
+            # 填充视频标题
+            for src in sources:
+                vc_result = await db.execute(
+                    select(VideoCache.title).where(VideoCache.bvid == src["bvid"])
+                )
+                title = vc_result.scalar()
+                if title:
+                    src["title"] = title
+            return messages, sources, question
+        # 图谱无结果，降级到向量检索
+        logger.info("图谱检索无结果，降级到向量检索")
+        route_type = "vector"
+
+    # 6) 学习路径路由 —— 新增
+    if route_type == "path":
+        graph = get_graph()
+        if graph.node_count() == 0:
+            await graph.load_from_db(db)
+        # 提取目标知识点
+        keywords = query_router._extract_keywords(question)
+        target_node = None
+        for kw in keywords:
+            results = graph.search_nodes_by_name(kw, limit=1)
+            if results:
+                target_node = results[0]
+                break
+        if target_node:
+            from app.services.path_recommender import PathRecommender
+            recommender = PathRecommender(graph)
+            path_result = recommender.recommend_path(target_node["id"], mode="standard")
+            context = _build_path_context(target_node, path_result)
+            messages = _build_graph_messages(context, question)
+            return messages, [], question
+        # 无法找到目标节点，降级到向量检索
+        logger.info("路径推荐无法找到目标节点，降级到向量检索")
+        route_type = "vector"
+
+    # 7) 列表类问题
+    if route_type == "db_list":
         if related is None:
             related = await _is_related_to_collection(db, folder_ids, question)
         if not related and not is_collection_intent:
@@ -429,8 +550,9 @@ async def _prepare_messages(request: ChatRequest, db: AsyncSession) -> tuple[lis
         if not context:
             return _build_fallback_messages("（暂无信息，请入库）", question), sources, question
         return _build_db_list_messages(context, question), sources, question
-    # 5) 总结类问题
-    if route == "db_content":
+
+    # 8) 总结类问题
+    if route_type == "db_content":
         if related is None:
             related = await _is_related_to_collection(db, folder_ids, question)
         if not related and not is_collection_intent:
@@ -439,12 +561,14 @@ async def _prepare_messages(request: ChatRequest, db: AsyncSession) -> tuple[lis
         if not context:
             return _build_fallback_messages("（暂无信息，请入库）", question), sources, question
         return _build_db_summary_messages(context, question), sources, question
-    # 6) 检查相关性
+
+    # 9) 检查相关性
     if related is None:
         related = await _is_related_to_collection(db, folder_ids, question)
     if not related and not is_collection_intent:
         return _build_direct_messages(question), [], question
-    # 7) 向量检索
+
+    # 10) 向量检索
     docs = []
     try:
         docs = rag.search(question, k=5, bvids=bvids if bvids else None)
@@ -461,6 +585,7 @@ async def _prepare_messages(request: ChatRequest, db: AsyncSession) -> tuple[lis
                 seen_bvids.add(bvid)
                 sources.append({"bvid": bvid, "title": title, "url": f"https://www.bilibili.com/video/{bvid}"})
         return _build_rag_messages("\n\n---\n\n".join(context_parts), question), sources, question
+
     # 兜底
     context, sources = await _get_video_context(db, folder_ids, include_content=False, limit=50)
     return _build_fallback_messages(context or "（暂无入库信息）", question), sources, question

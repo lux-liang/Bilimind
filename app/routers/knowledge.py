@@ -1,7 +1,7 @@
 """
-Bilibili RAG 知识库系统
+BiliMind 知识树学习导航系统
 
-知识库路由 - 构建和管理知识库
+知识库路由 - 构建和管理知识库 + 知识抽取 + 图谱构建
 """
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Depends
@@ -12,17 +12,26 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, get_db_context
-from app.models import FavoriteFolder, FavoriteVideo, VideoCache, UserSession, ContentSource, VideoContent
+from app.models import (
+    FavoriteFolder, FavoriteVideo, VideoCache, UserSession,
+    ContentSource, VideoContent, Segment, KnowledgeNode, NodeSegmentLink,
+)
 from app.services.bilibili import BilibiliService
 from app.services.content_fetcher import ContentFetcher
 from app.services.asr import ASRService
 from app.services.rag import RAGService
+from app.services.extractor import KnowledgeExtractor
+from app.services.graph_store import GraphStore
+from app.services.tree_builder import TreeBuilder
+from app.config import settings
 from app.routers.auth import get_session
 
 router = APIRouter(prefix="/knowledge", tags=["知识库"])
 
-# 全局 RAG 服务实例
+# 全局服务实例
 _rag_service: Optional[RAGService] = None
+_extractor: Optional[KnowledgeExtractor] = None
+_graph_store: Optional[GraphStore] = None
 
 # 构建任务状态
 build_tasks = {}
@@ -34,6 +43,21 @@ def get_rag_service() -> RAGService:
     if _rag_service is None:
         _rag_service = RAGService()
     return _rag_service
+
+
+def get_extractor() -> KnowledgeExtractor:
+    global _extractor
+    if _extractor is None:
+        _extractor = KnowledgeExtractor()
+    return _extractor
+
+
+def get_graph() -> GraphStore:
+    global _graph_store
+    if _graph_store is None:
+        _graph_store = GraphStore(graph_path=settings.graph_persist_path)
+        _graph_store.load_json()
+    return _graph_store
 
 
 class BuildRequest(BaseModel):
@@ -371,6 +395,14 @@ async def _sync_folder(
                 logger.info(f"[{bvid}] 内容未变化或无需升级，跳过向量化")
         except Exception as e:
             logger.warning(f"添加向量失败 [{bvid}]: {e} (仍会记录到数据库)")
+
+        # === 知识抽取 pipeline ===
+        try:
+            await _extract_knowledge_for_video(
+                db, content_fetcher, bvid, meta, cache
+            )
+        except Exception as e:
+            logger.warning(f"知识抽取失败 [{bvid}]: {e} (不影响主流程)")
         
         # 无论向量是否添加成功，都写入 FavoriteVideo 记录
         try:
@@ -732,3 +764,190 @@ async def delete_video_from_knowledge(bvid: str):
     except Exception as e:
         logger.error(f"删除视频失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 知识抽取 Pipeline ====================
+
+async def _extract_knowledge_for_video(
+    db: AsyncSession,
+    content_fetcher: ContentFetcher,
+    bvid: str,
+    meta: dict,
+    cache: Optional[VideoCache],
+) -> None:
+    """
+    对单个视频执行知识抽取：
+    1. 获取/创建 Segment
+    2. LLM 抽取实体和关系
+    3. 写入图存储 + SQLite
+    """
+    # 检查是否已抽取
+    existing_segs = await db.scalar(
+        select(func.count()).select_from(Segment).where(Segment.video_bvid == bvid)
+    )
+    if existing_segs and existing_segs > 0:
+        # 检查是否已完成抽取
+        done_count = await db.scalar(
+            select(func.count()).select_from(Segment)
+            .where(Segment.video_bvid == bvid, Segment.extraction_status == "done")
+        )
+        if done_count and done_count > 0:
+            logger.info(f"[{bvid}] 已完成知识抽取，跳过")
+            return
+
+    # Step 1: 获取 Segment
+    segments_data = await content_fetcher.fetch_segments(
+        bvid, cid=meta.get("cid"), title=meta.get("title"),
+        duration=meta.get("duration"),
+    )
+
+    if not segments_data:
+        logger.info(f"[{bvid}] 无法获取片段，跳过知识抽取")
+        return
+
+    # 写入 Segment 表
+    segment_records = []
+    for seg in segments_data:
+        record = Segment(
+            video_bvid=bvid,
+            segment_index=seg["segment_index"],
+            start_time=seg.get("start_time"),
+            end_time=seg.get("end_time"),
+            raw_text=seg["raw_text"],
+            cleaned_text=seg["raw_text"],  # 暂不做额外清洗
+            source_type=seg.get("source_type", "unknown"),
+            confidence=seg.get("confidence", 0.5),
+            extraction_status="pending",
+        )
+        db.add(record)
+        segment_records.append(record)
+
+    await db.flush()  # 获取 ID
+
+    # Step 2: 知识抽取
+    extractor = get_extractor()
+    extract_input = [
+        {
+            "text": seg.raw_text,
+            "segment_id": seg.id,
+            "video_bvid": bvid,
+        }
+        for seg in segment_records
+    ]
+
+    result = await extractor.extract_from_segments(extract_input, meta.get("title", ""))
+    entities = result.get("entities", [])
+    relations = result.get("relations", [])
+
+    if not entities:
+        for seg in segment_records:
+            seg.extraction_status = "done"
+        await db.commit()
+        logger.info(f"[{bvid}] 未抽取到知识实体")
+        return
+
+    # Step 3: 写入图存储
+    graph = get_graph()
+    name_to_node_id: dict[str, int] = {}
+
+    for entity in entities:
+        normalized = entity.get("normalized_name", entity["name"].lower().strip())
+
+        # 查找已有节点
+        existing_id = graph.find_node_by_name(normalized)
+        if existing_id is not None:
+            # 更新 source_count
+            node_data = graph.get_node(existing_id)
+            if node_data:
+                new_count = node_data.get("source_count", 1) + 1
+                graph.graph.nodes[existing_id]["source_count"] = new_count
+                graph.graph.nodes[existing_id]["confidence"] = max(
+                    node_data.get("confidence", 0), entity.get("confidence", 0.5)
+                )
+                # 更新 difficulty（取更大值，LLM 推断覆盖默认值）
+                new_difficulty = entity.get("difficulty", 1)
+                if new_difficulty > node_data.get("difficulty", 1):
+                    graph.graph.nodes[existing_id]["difficulty"] = new_difficulty
+                # 同步到 DB
+                db_result = await db.execute(
+                    select(KnowledgeNode).where(KnowledgeNode.id == existing_id)
+                )
+                db_node = db_result.scalar_one_or_none()
+                if db_node:
+                    db_node.source_count = new_count
+                    db_node.confidence = graph.graph.nodes[existing_id]["confidence"]
+                    if new_difficulty > db_node.difficulty:
+                        db_node.difficulty = new_difficulty
+            name_to_node_id[normalized] = existing_id
+        else:
+            # 创建新节点
+            node = await graph.sync_node_to_db(db, None, {
+                "node_type": entity.get("type", "concept"),
+                "name": entity["name"],
+                "normalized_name": normalized,
+                "definition": entity.get("definition", ""),
+                "difficulty": entity.get("difficulty", 1),
+                "confidence": entity.get("confidence", 0.5),
+                "source_count": entity.get("source_count", 1),
+                "review_status": "auto" if entity.get("confidence", 0) >= settings.tree_min_confidence else "pending_review",
+            })
+            graph.add_node(node.id, **{
+                "node_type": node.node_type,
+                "name": node.name,
+                "normalized_name": node.normalized_name,
+                "definition": node.definition,
+                "difficulty": node.difficulty,
+                "confidence": node.confidence,
+                "source_count": node.source_count,
+                "review_status": node.review_status,
+            })
+            name_to_node_id[normalized] = node.id
+
+        # 创建 NodeSegmentLink
+        for seg_id in entity.get("_segment_ids", []):
+            if seg_id:
+                db.add(NodeSegmentLink(
+                    node_id=name_to_node_id[normalized],
+                    segment_id=seg_id,
+                    video_bvid=bvid,
+                    relation="mentions",
+                    confidence=entity.get("confidence", 0.5),
+                ))
+
+    # 写入关系
+    for rel in relations:
+        src_norm = rel.get("source_normalized", rel["source"].lower().strip())
+        tgt_norm = rel.get("target_normalized", rel["target"].lower().strip())
+        src_id = name_to_node_id.get(src_norm)
+        tgt_id = name_to_node_id.get(tgt_norm)
+        if src_id and tgt_id and src_id != tgt_id:
+            graph.add_edge(src_id, tgt_id, **{
+                "relation_type": rel["type"],
+                "weight": 1.0,
+                "confidence": rel.get("confidence", 0.5),
+                "evidence_video_bvid": bvid,
+                "evidence_segment_id": rel.get("_segment_id"),
+            })
+            await graph.sync_edge_to_db(db, src_id, tgt_id, {
+                "relation_type": rel["type"],
+                "weight": 1.0,
+                "confidence": rel.get("confidence", 0.5),
+                "evidence_video_bvid": bvid,
+                "evidence_segment_id": rel.get("_segment_id"),
+            })
+
+    # 更新 segment 状态
+    for seg in segment_records:
+        seg.extraction_status = "done"
+
+    # 更新 VideoCache
+    if cache:
+        cache.extraction_status = "done"
+        cache.knowledge_node_count = len(entities)
+
+    await db.commit()
+
+    # 保存图缓存
+    graph.save_json()
+
+    logger.info(f"[{bvid}] 知识抽取完成: {len(entities)} 实体, {len(relations)} 关系")
