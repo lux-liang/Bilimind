@@ -59,8 +59,8 @@ export default function Home() {
     const s = localStorage.getItem("bili_session");
     const u = localStorage.getItem("bili_user");
     if (s && u) {
-      setSession(s);
-      setUser(u);
+      // 已登录用户直接跳转知识树
+      window.location.href = "/tree";
     }
   }, []);
 
@@ -70,6 +70,8 @@ export default function Home() {
     setShowLogin(false);
     localStorage.setItem("bili_session", sid);
     localStorage.setItem("bili_user", info.uname);
+    // 登录后跳转到知识树
+    window.location.href = "/tree";
   };
 
   const onLogout = () => {
@@ -121,15 +123,15 @@ export default function Home() {
           <section className="hero">
             <div className="hero-content">
               <span className="hero-kicker">让你的B站收藏夹不再吃灰</span>
-              <h1 className="hero-title">把"收藏"变成真正可用的知识</h1>
+              <h1 className="hero-title">自动构建你的个人知识树</h1>
               <p className="hero-desc">
-                很多人收藏了大量学习视频，却迟迟没看、没整理、也找不到重点。<br />
-                这里把碎片化内容接入 AI：自动提炼、语义检索、对话式回顾，让收藏真正提升效率。
+                收藏了大量学习视频，却无从下手？<br />
+                BiliMind 自动提取知识点、构建知识树、规划学习路径，让收藏夹真正变成可导航的知识资产。
               </p>
 
               <div className="hero-actions">
                 <button className="btn btn-primary btn-lg" onClick={() => setShowLogin(true)}>
-                  扫码登录开始构建
+                  扫码登录 · 开始构建知识树
                 </button>
                 <button className="btn btn-outline" onClick={() => setShowDemo(true)}>
                   体验检索流程
@@ -141,9 +143,9 @@ export default function Home() {
               <div className="pipeline-row">
                 {[
                   { icon: "1", title: "同步", desc: "接入收藏夹" },
-                  { icon: "2", title: "提炼", desc: "整理要点" },
-                  { icon: "3", title: "检索", desc: "语义查找" },
-                  { icon: "4", title: "回顾", desc: "对话复习" },
+                  { icon: "2", title: "抽取", desc: "提取知识点" },
+                  { icon: "3", title: "构建", desc: "生成知识树" },
+                  { icon: "4", title: "导航", desc: "路径学习" },
                 ].map((item, i) => (
                   <div key={i} className="pipeline-card">
                     <span className="pipeline-icon">{item.icon}</span>
