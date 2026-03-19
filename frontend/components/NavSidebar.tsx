@@ -6,20 +6,24 @@ import { usePathname } from "next/navigation";
 export default function NavSidebar() {
   const pathname = usePathname();
 
-  const primaryLinks = [
-    { href: "/tree", label: "知识树", icon: "tree" },
-    { href: "/learning-path", label: "学习路径", icon: "path" },
-  ];
-
-  const secondaryLinks = [
-    { href: "/search", label: "搜索", icon: "search" },
-    { href: "/chat", label: "辅助问答", icon: "chat" },
+  const links = [
+    { href: "/tree", label: "知识树", icon: "tree", primary: true },
+    { href: "/learning-path", label: "学习路径", icon: "path", primary: true },
+    { href: "/search", label: "搜索", icon: "search", primary: false },
+    { href: "/chat", label: "辅助问答", icon: "chat", primary: false },
   ];
 
   const icons: Record<string, React.ReactNode> = {
     tree: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M12 3v18M12 7l-4 4M12 7l4 4M12 13l-6 5M12 13l6 5" />
+        <circle cx="12" cy="5" r="2" />
+        <circle cx="7" cy="14" r="1.5" />
+        <circle cx="17" cy="14" r="1.5" />
+        <path d="M12 7v3M9.5 12.5l-1.5 1M14.5 12.5l1.5 1" />
+        <circle cx="5" cy="20" r="1.2" />
+        <circle cx="9.5" cy="20" r="1.2" />
+        <circle cx="17" cy="20" r="1.2" />
+        <path d="M6.2 15.5l-0.5 3.3M8.2 15.5l0.5 3.3M17 15.5v3.3" />
       </svg>
     ),
     path: (
@@ -42,29 +46,31 @@ export default function NavSidebar() {
 
   return (
     <nav className="nav-sidebar">
-      <div className="nav-section-label">导航</div>
-      {primaryLinks.map((link) => (
-        <Link
-          key={link.href}
-          href={link.href}
-          className={`nav-item ${pathname === link.href ? "active" : ""}`}
-        >
-          {icons[link.icon]}
-          <span>{link.label}</span>
-        </Link>
-      ))}
-
-      <div className="nav-section-label" style={{ marginTop: 12 }}>工具</div>
-      {secondaryLinks.map((link) => (
-        <Link
-          key={link.href}
-          href={link.href}
-          className={`nav-item ${pathname === link.href ? "active" : ""}`}
-        >
-          {icons[link.icon]}
-          <span>{link.label}</span>
-        </Link>
-      ))}
+      <div className="nav-primary-group">
+        {links.filter(l => l.primary).map((link) => (
+          <Link
+            key={link.href}
+            href={link.href}
+            className={`nav-item ${pathname === link.href ? "active" : ""}`}
+          >
+            {icons[link.icon]}
+            <span>{link.label}</span>
+          </Link>
+        ))}
+      </div>
+      <div className="nav-divider" />
+      <div className="nav-secondary-group">
+        {links.filter(l => !l.primary).map((link) => (
+          <Link
+            key={link.href}
+            href={link.href}
+            className={`nav-item nav-item-secondary ${pathname === link.href ? "active" : ""}`}
+          >
+            {icons[link.icon]}
+            <span>{link.label}</span>
+          </Link>
+        ))}
+      </div>
     </nav>
   );
 }
