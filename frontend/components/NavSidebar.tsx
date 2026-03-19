@@ -6,11 +6,14 @@ import { usePathname } from "next/navigation";
 export default function NavSidebar() {
   const pathname = usePathname();
 
-  const links = [
+  const primaryLinks = [
     { href: "/tree", label: "知识树", icon: "tree" },
     { href: "/learning-path", label: "学习路径", icon: "path" },
+  ];
+
+  const secondaryLinks = [
     { href: "/search", label: "搜索", icon: "search" },
-    { href: "/chat", label: "问答", icon: "chat" },
+    { href: "/chat", label: "辅助问答", icon: "chat" },
   ];
 
   const icons: Record<string, React.ReactNode> = {
@@ -21,7 +24,8 @@ export default function NavSidebar() {
     ),
     path: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M9 20l-5.5-5.5L9 9M15 4l5.5 5.5L15 15" />
+        <circle cx="5" cy="6" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="18" r="2" />
+        <path d="M7 7l3 3M14 13l3 3" />
       </svg>
     ),
     search: (
@@ -38,7 +42,20 @@ export default function NavSidebar() {
 
   return (
     <nav className="nav-sidebar">
-      {links.map((link) => (
+      <div className="nav-section-label">导航</div>
+      {primaryLinks.map((link) => (
+        <Link
+          key={link.href}
+          href={link.href}
+          className={`nav-item ${pathname === link.href ? "active" : ""}`}
+        >
+          {icons[link.icon]}
+          <span>{link.label}</span>
+        </Link>
+      ))}
+
+      <div className="nav-section-label" style={{ marginTop: 12 }}>工具</div>
+      {secondaryLinks.map((link) => (
         <Link
           key={link.href}
           href={link.href}

@@ -15,8 +15,8 @@ const body = Noto_Sans_SC({
 });
 
 export const metadata: Metadata = {
-  title: "BiliMind - 知识树学习导航",
-  description: "基于B站收藏视频自动构建的个人知识树与学习导航系统",
+  title: "BiliMind — 个人视频知识导航系统",
+  description: "基于 B 站收藏视频自动构建知识树、规划学习路径、追溯视频片段证据的个人知识导航系统",
   icons: {
     icon: "/favicon.ico",
   },

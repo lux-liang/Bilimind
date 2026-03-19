@@ -10,7 +10,7 @@ export default function ChatPage() {
   const [session, setSession] = useState<string | null>(null);
   const [statsKey, setStatsKey] = useState(0);
   const [selectedFolderIds, setSelectedFolderIds] = useState<number[]>([]);
-  const [leftWidth, setLeftWidth] = useState(320);
+  const [leftWidth, setLeftWidth] = useState(280);
   const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef<HTMLElement>(null);
 
@@ -28,7 +28,7 @@ export default function ChatPage() {
     if (!isDragging || !containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const newWidth = e.clientX - rect.left;
-    setLeftWidth(Math.max(200, Math.min(rect.width * 0.5, newWidth)));
+    setLeftWidth(Math.max(200, Math.min(rect.width * 0.45, newWidth)));
   }, [isDragging]);
 
   const handleMouseUp = useCallback(() => setIsDragging(false), []);
@@ -60,8 +60,8 @@ export default function ChatPage() {
             <NavSidebar />
             <div className="app-content">
               <div className="tree-empty">
-                <p>Please log in first.</p>
-                <a href="/">Go to login page</a>
+                <p>请先登录后使用辅助问答</p>
+                <a href="/">前往登录</a>
               </div>
             </div>
           </div>
@@ -75,7 +75,7 @@ export default function ChatPage() {
       <header className="app-topbar">
         <div className="brand">
           <span className="brand-title">BiliMind</span>
-          <span className="brand-subtitle">问答</span>
+          <span className="brand-subtitle">辅助问答</span>
         </div>
         <div className="topbar-actions">
           <UserTopbar />
@@ -84,23 +84,29 @@ export default function ChatPage() {
       <main className="app-main">
         <div className="app-with-nav">
           <NavSidebar />
-          <section className="workspace" ref={containerRef} style={{ flex: 1 }}>
-            <aside className="panel panel-sources" style={{ width: leftWidth, flexShrink: 0 }}>
-              <SourcesPanel
-                sessionId={session}
-                onBuildDone={() => setStatsKey((v) => v + 1)}
-                onSelectionChange={setSelectedFolderIds}
-              />
-            </aside>
-            <div className="resizer" onMouseDown={handleMouseDown} style={{ cursor: "col-resize" }} />
-            <section className="panel panel-chat" style={{ flex: 1 }}>
-              <ChatPanel
-                statsKey={statsKey}
-                sessionId={session}
-                folderIds={selectedFolderIds}
-              />
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div className="chat-page-header">
+              <h2>基于知识树的辅助问答</h2>
+              <p>向知识库提问，回答基于你收藏的视频内容生成，支持追溯来源片段</p>
+            </div>
+            <section className="workspace" ref={containerRef} style={{ flex: 1 }}>
+              <aside className="panel panel-sources" style={{ width: leftWidth, flexShrink: 0 }}>
+                <SourcesPanel
+                  sessionId={session}
+                  onBuildDone={() => setStatsKey((v) => v + 1)}
+                  onSelectionChange={setSelectedFolderIds}
+                />
+              </aside>
+              <div className="resizer" onMouseDown={handleMouseDown} style={{ cursor: "col-resize" }} />
+              <section className="panel panel-chat" style={{ flex: 1 }}>
+                <ChatPanel
+                  statsKey={statsKey}
+                  sessionId={session}
+                  folderIds={selectedFolderIds}
+                />
+              </section>
             </section>
-          </section>
+          </div>
         </div>
       </main>
     </div>

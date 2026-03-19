@@ -43,6 +43,42 @@ EXTRACTION_PROMPT = """你是知识抽取专家。从以下视频文本片段中
 VALID_NODE_TYPES = {t.value for t in NodeType}
 VALID_RELATION_TYPES = {t.value for t in RelationType}
 
+# ==================== 噪声过滤规则 ====================
+
+# 纯英文噪声词（ASR口语残片、常见无语义短词）
+NOISE_EN_WORDS = {
+    "someone", "something", "anything", "everything", "nothing",
+    "yeah", "yes", "okay", "well", "like", "just", "really",
+    "very", "much", "more", "also", "even", "still", "only",
+    "here", "there", "then", "when", "what", "where", "which",
+    "your", "their", "other", "some", "many", "each", "every",
+    "first", "second", "third", "last", "next", "new", "old",
+    "good", "bad", "big", "small", "long", "short", "high", "low",
+    "bud", "dude", "guy", "man", "sir", "hey", "hmm", "uhh",
+    "gonna", "wanna", "gotta", "kinda", "sorta",
+    "http", "https", "www", "com", "org", "html", "css",
+}
+
+# 中文口语噪声词
+NOISE_ZH_WORDS = {
+    "大师兄", "小伙伴", "同学们", "朋友们", "大家好", "各位",
+    "老铁", "兄弟们", "宝子们", "家人们", "观众", "粉丝",
+    "一下", "一些", "一点", "一种", "一个", "这种", "那种",
+    "其实", "然后", "就是", "就是说", "也就是说", "怎么说呢",
+    "对吧", "对不对", "是吧", "嗯", "啊", "哦", "呢",
+    "视频", "内容", "东西", "事情", "时候", "地方", "方面",
+    "今天", "昨天", "明天", "刚才", "现在", "之前", "之后",
+}
+
+# 过于宽泛的实体名
+OVERLY_BROAD = {
+    "学习", "知识", "方法", "技术", "系统", "工具", "应用",
+    "问题", "解决方案", "思路", "方向", "领域", "行业",
+    "基础", "进阶", "高级", "入门", "核心", "重点", "关键",
+    "learning", "knowledge", "method", "technology", "system",
+    "tool", "application", "problem", "solution", "approach",
+}
+
 
 class KnowledgeExtractor:
     """
@@ -160,13 +196,15 @@ class KnowledgeExtractor:
         return {"entities": entities, "relations": relations}
 
     def _validate_entities(self, entities: list) -> list:
-        """验证实体列表"""
+        """验证实体列表 + 噪声过滤"""
         valid = []
         for e in entities:
             if not isinstance(e, dict):
                 continue
             name = (e.get("name") or "").strip()
             if not name or len(name) < 2:
+                continue
+            if self._is_noise_entity(name):
                 continue
             node_type = e.get("type", "concept")
             if node_type not in VALID_NODE_TYPES:
@@ -184,6 +222,32 @@ class KnowledgeExtractor:
                 "confidence": confidence,
             })
         return valid
+
+    @staticmethod
+    def _is_noise_entity(name: str) -> bool:
+        """判断实体名是否为噪声"""
+        lower = name.strip().lower()
+        # 纯英文噪声词
+        if lower in NOISE_EN_WORDS:
+            return True
+        # 中文口语噪声
+        if name in NOISE_ZH_WORDS:
+            return True
+        # 过于宽泛
+        if lower in OVERLY_BROAD:
+            return True
+        # 纯数字或单个字符
+        if re.match(r'^[\d\s\.\-]+$', name):
+            return True
+        if len(name) == 1:
+            return True
+        # 纯英文且长度<=3（很可能是 ASR 碎片如 "bud"、"the"）
+        if re.match(r'^[a-zA-Z]{1,3}$', name):
+            return True
+        # 纯标点或特殊字符
+        if re.match(r'^[\W_]+$', name):
+            return True
+        return False
 
     def _validate_relations(self, relations: list) -> list:
         """验证关系列表"""

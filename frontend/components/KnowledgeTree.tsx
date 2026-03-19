@@ -10,10 +10,11 @@ interface TreeNodeItemProps {
   difficultyFilter: number;
   onNodeSelect?: (nodeId: number) => void;
   selectedNodeId?: number | null;
+  depth?: number;
 }
 
-function TreeNodeItem({ node, searchTerm, difficultyFilter, onNodeSelect, selectedNodeId }: TreeNodeItemProps) {
-  const [expanded, setExpanded] = useState(node.node_type === "topic");
+function TreeNodeItem({ node, searchTerm, difficultyFilter, onNodeSelect, selectedNodeId, depth = 0 }: TreeNodeItemProps) {
+  const [expanded, setExpanded] = useState(node.node_type === "topic" || depth === 0);
   const hasChildren = node.children && node.children.length > 0;
 
   const matchesSearch = !searchTerm || node.name.toLowerCase().includes(searchTerm.toLowerCase());
@@ -29,7 +30,10 @@ function TreeNodeItem({ node, searchTerm, difficultyFilter, onNodeSelect, select
   const visible = (matchesSearch && matchesDifficulty) || childMatchesFilter(node);
   if (!visible) return null;
 
-  const stars = Array.from({ length: node.difficulty }, () => "\u25CF").join("");
+  // 弱关联节点在非搜索模式下默认折叠
+  const grade = (node as Record<string, unknown>).grade as string | undefined;
+  const isWeak = grade === "weak";
+  const isCore = grade === "core";
   const isSelected = selectedNodeId === node.id;
 
   return (
@@ -41,16 +45,21 @@ function TreeNodeItem({ node, searchTerm, difficultyFilter, onNodeSelect, select
         >
           {hasChildren ? (expanded ? "\u25BC" : "\u25B6") : "\u00A0\u00A0"}
         </span>
+
+        {/* 质量等级指示点 */}
+        <span className={`grade-indicator ${isCore ? "grade-core" : isWeak ? "grade-weak" : "grade-normal"}`} />
+
         <span className={`node-badge ${node.node_type}`}>{node.node_type}</span>
         <span
           className="tree-node-name clickable"
           onClick={() => onNodeSelect?.(node.id)}
+          style={isWeak ? { opacity: 0.65 } : undefined}
         >
           {node.name}
         </span>
-        {node.difficulty > 0 && <span className="node-stars">{stars}</span>}
+        {node.difficulty > 0 && <span className="node-stars">{"●".repeat(node.difficulty)}</span>}
         {node.video_count > 0 && <span className="node-meta">{node.video_count} 视频</span>}
-        {node.is_reference && <span className="node-meta">(ref)</span>}
+        {node.is_reference && <span className="node-meta" style={{ fontSize: 10, opacity: 0.6 }}>ref</span>}
       </div>
       {expanded && hasChildren && (
         <div className="tree-children">
@@ -62,6 +71,7 @@ function TreeNodeItem({ node, searchTerm, difficultyFilter, onNodeSelect, select
               difficultyFilter={difficultyFilter}
               onNodeSelect={onNodeSelect}
               selectedNodeId={selectedNodeId}
+              depth={depth + 1}
             />
           ))}
         </div>
@@ -104,11 +114,10 @@ export default function KnowledgeTree({ onNodeSelect, selectedNodeId }: Knowledg
     );
   }
 
-  // 提取主题列表供筛选
   const topics = data.tree.filter(n => n.node_type === "topic" && n.id > 0);
 
   return (
-    <div className="tree-container">
+    <>
       <div className="tree-toolbar">
         <input
           className="tree-search"
@@ -123,9 +132,9 @@ export default function KnowledgeTree({ onNodeSelect, selectedNodeId }: Knowledg
           onChange={(e) => setStageFilter(e.target.value)}
         >
           <option value="">全部阶段</option>
-          <option value="beginner">入门 (1-2)</option>
-          <option value="intermediate">进阶 (3-4)</option>
-          <option value="advanced">实战 (5)</option>
+          <option value="beginner">入门</option>
+          <option value="intermediate">进阶</option>
+          <option value="advanced">实战</option>
         </select>
         {topics.length > 1 && (
           <select
@@ -145,24 +154,26 @@ export default function KnowledgeTree({ onNodeSelect, selectedNodeId }: Knowledg
           onChange={(e) => setDifficultyFilter(Number(e.target.value))}
         >
           <option value={0}>全部难度</option>
-          <option value={1}>★ 入门</option>
-          <option value={2}>★★ 基础</option>
-          <option value={3}>★★★ 中级</option>
-          <option value={4}>★★★★ 高级</option>
-          <option value={5}>★★★★★ 专家</option>
+          <option value={1}>● 入门</option>
+          <option value={2}>●● 基础</option>
+          <option value={3}>●●● 中级</option>
+          <option value={4}>●●●● 高级</option>
+          <option value={5}>●●●●● 专家</option>
         </select>
       </div>
 
-      {data.tree.map((node) => (
-        <TreeNodeItem
-          key={node.id}
-          node={node}
-          searchTerm={searchTerm}
-          difficultyFilter={difficultyFilter}
-          onNodeSelect={onNodeSelect}
-          selectedNodeId={selectedNodeId}
-        />
-      ))}
+      <div className="tree-scroll">
+        {data.tree.map((node) => (
+          <TreeNodeItem
+            key={node.id}
+            node={node}
+            searchTerm={searchTerm}
+            difficultyFilter={difficultyFilter}
+            onNodeSelect={onNodeSelect}
+            selectedNodeId={selectedNodeId}
+          />
+        ))}
+      </div>
 
       <div className="tree-stats">
         <span>{data.stats.total_topics} 主题</span>
@@ -172,6 +183,6 @@ export default function KnowledgeTree({ onNodeSelect, selectedNodeId }: Knowledg
           <span>{data.stats.low_confidence_count} 待审核</span>
         )}
       </div>
-    </div>
+    </>
   );
 }

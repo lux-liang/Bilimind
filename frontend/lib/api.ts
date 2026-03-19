@@ -2,7 +2,11 @@
  * API 客户端
  */
 
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (
+  typeof window !== "undefined" && window.location.hostname !== "localhost"
+    ? "/api/proxy"  // 外网访问时走 Next.js 代理
+    : "http://localhost:8000"
+);
 
 // 通用请求函数
 async function request<T>(
