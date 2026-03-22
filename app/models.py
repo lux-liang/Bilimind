@@ -18,12 +18,14 @@ Base = declarative_base()
 # ==================== SQLAlchemy 模型 ====================
 
 class VideoCache(Base):
-    """视频内容缓存表"""
+    """内容缓存表（支持多平台：bilibili/xiaohongshu/zhihu）"""
     __tablename__ = 'video_cache'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    bvid = Column(String(20), unique=True, index=True, nullable=False)
+    bvid = Column(String(20), unique=True, index=True, nullable=False)  # 通用source_id: bvid/note_id/answer_id
     cid = Column(Integer, nullable=True)
+    source_type = Column(String(20), default='bilibili')  # bilibili/xiaohongshu/zhihu
+    source_url = Column(String(1000), nullable=True)  # 原始URL
     title = Column(String(500), nullable=False)
     description = Column(Text, nullable=True)
     owner_name = Column(String(100), nullable=True)  # UP主名称
@@ -47,6 +49,7 @@ class VideoCache(Base):
     process_error = Column(Text, nullable=True)  # 处理错误信息
     extraction_status = Column(String(20), default='pending')  # pending/done/failed
     knowledge_node_count = Column(Integer, default=0)  # 关联知识点数量
+    session_id = Column(String(64), index=True, nullable=True)  # 用户隔离
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -127,6 +130,7 @@ class Segment(Base):
     source_type = Column(String(20), nullable=True)  # subtitle / asr / basic
     confidence = Column(Float, default=1.0)
     extraction_status = Column(String(20), default='pending')  # pending/done/failed
+    session_id = Column(String(64), index=True, nullable=True)  # 用户隔离
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -145,6 +149,7 @@ class KnowledgeNode(Base):
     confidence = Column(Float, default=0.5)
     source_count = Column(Integer, default=1)
     review_status = Column(String(20), default='auto')   # auto/approved/rejected/pending_review
+    session_id = Column(String(64), index=True, nullable=True)  # 用户隔离
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -161,6 +166,7 @@ class KnowledgeEdge(Base):
     confidence = Column(Float, default=0.5)
     evidence_segment_id = Column(Integer, nullable=True)
     evidence_video_bvid = Column(String(20), nullable=True)
+    session_id = Column(String(64), index=True, nullable=True)  # 用户隔离
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -174,6 +180,39 @@ class NodeSegmentLink(Base):
     video_bvid = Column(String(20), index=True)
     relation = Column(String(20), default='mentions')    # mentions/explains/demonstrates
     confidence = Column(Float, default=0.5)
+    session_id = Column(String(64), index=True, nullable=True)  # 用户隔离
+
+
+class GameScore(Base):
+    """知识预测游戏得分表"""
+    __tablename__ = 'game_scores'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(64), index=True, nullable=False)
+    score = Column(Integer, default=0)
+    total_challenges = Column(Integer, default=0)
+    correct_count = Column(Integer, default=0)
+    streak = Column(Integer, default=0)
+    best_streak = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SRSRecord(Base):
+    """间隔重复记录表"""
+    __tablename__ = 'srs_records'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(64), index=True, nullable=False)
+    node_id = Column(Integer, index=True, nullable=False)
+    easiness_factor = Column(Float, default=2.5)
+    interval_days = Column(Float, default=1.0)
+    repetitions = Column(Integer, default=0)
+    next_review_date = Column(DateTime, nullable=True)
+    last_review_date = Column(DateTime, nullable=True)
+    implicit_review = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 # ==================== Pydantic 模型 (API 用) ====================
@@ -227,12 +266,20 @@ class VideoInfo(BaseModel):
     pic_url: Optional[str] = None
 
 
+class SourceType(str, Enum):
+    """内容平台来源"""
+    BILIBILI = "bilibili"
+    XIAOHONGSHU = "xiaohongshu"
+    ZHIHU = "zhihu"
+
+
 class VideoContent(BaseModel):
-    """视频内容（含摘要）"""
-    bvid: str
+    """内容（含摘要，支持多平台）"""
+    bvid: str  # 通用source_id
     title: str
     content: str
     source: ContentSource
+    source_type: SourceType = SourceType.BILIBILI
     outline: Optional[list] = None
 
 
