@@ -17,12 +17,13 @@ from app.models import (
     ContentSource, VideoContent, Segment, KnowledgeNode, NodeSegmentLink,
 )
 from app.services.bilibili import BilibiliService
-from app.services.content_fetcher import ContentFetcher
+from app.services.content_fetcher import ContentFetcher, identify_platform
 from app.services.asr import ASRService
 from app.services.rag import RAGService
 from app.services.extractor import KnowledgeExtractor
 from app.services.graph_store import GraphStore
 from app.services.tree_builder import TreeBuilder
+from app.services.graph_rag import GraphRAGService
 from app.config import settings
 from app.routers.auth import get_session
 
@@ -58,6 +59,16 @@ def get_graph() -> GraphStore:
         _graph_store = GraphStore(graph_path=settings.graph_persist_path)
         _graph_store.load_json()
     return _graph_store
+
+
+_graph_rag_service: Optional[GraphRAGService] = None
+
+
+def get_graph_rag_service() -> GraphRAGService:
+    global _graph_rag_service
+    if _graph_rag_service is None:
+        _graph_rag_service = GraphRAGService(get_graph())
+    return _graph_rag_service
 
 
 class BuildRequest(BaseModel):
@@ -149,7 +160,7 @@ def _extract_video_info(media: dict) -> tuple[str, str, Optional[int]]:
     return bvid, title, cid
 
 
-async def _upsert_video_cache(db: AsyncSession, bvid: str, meta: dict) -> None:
+async def _upsert_video_cache(db: AsyncSession, bvid: str, meta: dict, session_id: Optional[str] = None) -> None:
     """写入或更新视频缓存信息"""
     result = await db.execute(select(VideoCache).where(VideoCache.bvid == bvid))
     cache = result.scalar_one_or_none()
@@ -164,6 +175,7 @@ async def _upsert_video_cache(db: AsyncSession, bvid: str, meta: dict) -> None:
             duration=meta.get("duration"),
             pic_url=meta.get("cover"),
             is_processed=False,
+            session_id=session_id,
         )
         db.add(cache)
         return
@@ -273,7 +285,7 @@ async def _sync_folder(
 
     # 写入标题/简介等信息
     for bvid, meta in video_map.items():
-        await _upsert_video_cache(db, bvid, meta)
+        await _upsert_video_cache(db, bvid, meta, session_id=session_id)
 
     source_priority = {
         ContentSource.BASIC_INFO.value: 1,
@@ -399,7 +411,7 @@ async def _sync_folder(
         # === 知识抽取 pipeline ===
         try:
             await _extract_knowledge_for_video(
-                db, content_fetcher, bvid, meta, cache
+                db, content_fetcher, bvid, meta, cache, session_id=session_id
             )
         except Exception as e:
             logger.warning(f"知识抽取失败 [{bvid}]: {e} (不影响主流程)")
@@ -774,6 +786,7 @@ async def _extract_knowledge_for_video(
     bvid: str,
     meta: dict,
     cache: Optional[VideoCache],
+    session_id: Optional[str] = None,
 ) -> None:
     """
     对单个视频执行知识抽取：
@@ -818,6 +831,7 @@ async def _extract_knowledge_for_video(
             source_type=seg.get("source_type", "unknown"),
             confidence=seg.get("confidence", 0.5),
             extraction_status="pending",
+            session_id=session_id,
         )
         db.add(record)
         segment_records.append(record)
@@ -890,6 +904,7 @@ async def _extract_knowledge_for_video(
                 "confidence": entity.get("confidence", 0.5),
                 "source_count": entity.get("source_count", 1),
                 "review_status": "auto" if entity.get("confidence", 0) >= settings.tree_min_confidence else "pending_review",
+                "session_id": session_id,
             })
             graph.add_node(node.id, **{
                 "node_type": node.node_type,
@@ -912,6 +927,7 @@ async def _extract_knowledge_for_video(
                     video_bvid=bvid,
                     relation="mentions",
                     confidence=entity.get("confidence", 0.5),
+                    session_id=session_id,
                 ))
 
     # 写入关系
@@ -934,6 +950,7 @@ async def _extract_knowledge_for_video(
                 "confidence": rel.get("confidence", 0.5),
                 "evidence_video_bvid": bvid,
                 "evidence_segment_id": rel.get("_segment_id"),
+                "session_id": session_id,
             })
 
     # 更新 segment 状态
@@ -951,3 +968,270 @@ async def _extract_knowledge_for_video(
     graph.save_json()
 
     logger.info(f"[{bvid}] 知识抽取完成: {len(entities)} 实体, {len(relations)} 关系")
+
+
+# ==================== 跨平台 URL 导入 ====================
+
+class ImportUrlRequest(BaseModel):
+    """URL 导入请求"""
+    url: str
+    session_id: Optional[str] = None
+
+
+class ImportUrlResponse(BaseModel):
+    """URL 导入响应"""
+    source_id: str
+    source_type: str
+    title: str
+    content_length: int
+    segment_count: int
+    node_count: int
+
+
+@router.post("/import-url", response_model=ImportUrlResponse)
+async def import_url(
+    request: ImportUrlRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    通过 URL 导入内容（支持 B站/知乎/小红书）
+
+    自动识别平台 → 抓取内容 → 写入缓存 → 知识抽取 → 写入图谱
+    """
+    url = request.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="URL 不能为空")
+
+    platform, params = identify_platform(url)
+    if platform == "unknown":
+        raise HTTPException(status_code=400, detail=f"不支持的 URL 格式: {url}")
+
+    # 创建 ContentFetcher（对 bilibili 需要 BilibiliService）
+    if platform == "bilibili":
+        session = None
+        if request.session_id:
+            session = await get_session(request.session_id)
+        cookies = (session or {}).get("cookies", {})
+        bili = BilibiliService(
+            sessdata=cookies.get("SESSDATA"),
+            bili_jct=cookies.get("bili_jct"),
+            dedeuserid=cookies.get("DedeUserID"),
+        )
+        asr_service = ASRService()
+        content_fetcher = ContentFetcher(bili, asr_service)
+    else:
+        # 非 B站平台不需要 BilibiliService
+        content_fetcher = ContentFetcher(
+            bilibili_service=None,  # type: ignore
+            asr_service=None,  # type: ignore
+        )
+
+    try:
+        content, segments_data = await content_fetcher.fetch_from_url(url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"URL 导入失败 [{url}]: {e}")
+        raise HTTPException(status_code=500, detail=f"内容获取失败: {e}")
+    finally:
+        if platform == "bilibili":
+            await bili.close()
+
+    source_id = content.bvid
+    source_type_str = content.source_type.value if hasattr(content.source_type, 'value') else str(content.source_type)
+
+    # 写入 VideoCache
+    result = await db.execute(select(VideoCache).where(VideoCache.bvid == source_id))
+    cache = result.scalar_one_or_none()
+    if cache is None:
+        cache = VideoCache(
+            bvid=source_id,
+            title=content.title,
+            content=content.content,
+            content_source=content.source.value,
+            source_type=source_type_str,
+            source_url=url,
+            is_processed=True,
+            session_id=request.session_id,
+        )
+        db.add(cache)
+    else:
+        cache.content = content.content
+        cache.content_source = content.source.value
+        cache.source_type = source_type_str
+        cache.source_url = url
+        cache.is_processed = True
+
+    await db.flush()
+
+    # 写入 Segment 表
+    segment_records = []
+    for seg in segments_data:
+        record = Segment(
+            video_bvid=source_id,
+            segment_index=seg["segment_index"],
+            start_time=seg.get("start_time"),
+            end_time=seg.get("end_time"),
+            raw_text=seg["raw_text"],
+            cleaned_text=seg["raw_text"],
+            source_type=seg.get("source_type", "text_paragraph"),
+            confidence=seg.get("confidence", 0.8),
+            extraction_status="pending",
+            session_id=request.session_id,
+        )
+        db.add(record)
+        segment_records.append(record)
+    await db.flush()
+
+    # 写入 RAG 向量库
+    rag = get_rag_service()
+    try:
+        rag.delete_video(source_id)
+    except Exception:
+        pass
+    try:
+        chunks = rag.add_video_content(content)
+        logger.info(f"[{source_id}] 向量化完成，块数={chunks}")
+    except Exception as e:
+        logger.warning(f"[{source_id}] 向量化失败: {e}")
+
+    # 知识抽取
+    node_count = 0
+    try:
+        extractor = get_extractor()
+        extract_input = [
+            {
+                "text": seg.raw_text,
+                "segment_id": seg.id,
+                "video_bvid": source_id,
+            }
+            for seg in segment_records
+        ]
+        result_data = await extractor.extract_from_segments(extract_input, content.title)
+        entities = result_data.get("entities", [])
+        relations = result_data.get("relations", [])
+
+        if entities:
+            graph = get_graph()
+            name_to_node_id: dict[str, int] = {}
+
+            for entity in entities:
+                normalized = entity.get("normalized_name", entity["name"].lower().strip())
+                existing_id = graph.find_node_by_name(normalized)
+                if existing_id is not None:
+                    node_data = graph.get_node(existing_id)
+                    if node_data:
+                        new_count = node_data.get("source_count", 1) + 1
+                        graph.graph.nodes[existing_id]["source_count"] = new_count
+                        graph.graph.nodes[existing_id]["confidence"] = max(
+                            node_data.get("confidence", 0), entity.get("confidence", 0.5)
+                        )
+                        db_result = await db.execute(
+                            select(KnowledgeNode).where(KnowledgeNode.id == existing_id)
+                        )
+                        db_node = db_result.scalar_one_or_none()
+                        if db_node:
+                            db_node.source_count = new_count
+                            db_node.confidence = graph.graph.nodes[existing_id]["confidence"]
+                    name_to_node_id[normalized] = existing_id
+                else:
+                    node = await graph.sync_node_to_db(db, None, {
+                        "node_type": entity.get("type", "concept"),
+                        "name": entity["name"],
+                        "normalized_name": normalized,
+                        "definition": entity.get("definition", ""),
+                        "difficulty": entity.get("difficulty", 1),
+                        "confidence": entity.get("confidence", 0.5),
+                        "source_count": entity.get("source_count", 1),
+                        "review_status": "auto" if entity.get("confidence", 0) >= settings.tree_min_confidence else "pending_review",
+                        "session_id": request.session_id,
+                    })
+                    graph.add_node(node.id, **{
+                        "node_type": node.node_type,
+                        "name": node.name,
+                        "normalized_name": node.normalized_name,
+                        "definition": node.definition,
+                        "difficulty": node.difficulty,
+                        "confidence": node.confidence,
+                        "source_count": node.source_count,
+                        "review_status": node.review_status,
+                    })
+                    name_to_node_id[normalized] = node.id
+
+                for seg_id in entity.get("_segment_ids", []):
+                    if seg_id:
+                        db.add(NodeSegmentLink(
+                            node_id=name_to_node_id[normalized],
+                            segment_id=seg_id,
+                            video_bvid=source_id,
+                            relation="mentions",
+                            confidence=entity.get("confidence", 0.5),
+                            session_id=request.session_id,
+                        ))
+
+            for rel in relations:
+                src_norm = rel.get("source_normalized", rel["source"].lower().strip())
+                tgt_norm = rel.get("target_normalized", rel["target"].lower().strip())
+                src_id = name_to_node_id.get(src_norm)
+                tgt_id = name_to_node_id.get(tgt_norm)
+                if src_id and tgt_id and src_id != tgt_id:
+                    graph.add_edge(src_id, tgt_id, **{
+                        "relation_type": rel["type"],
+                        "weight": 1.0,
+                        "confidence": rel.get("confidence", 0.5),
+                        "evidence_video_bvid": source_id,
+                        "evidence_segment_id": rel.get("_segment_id"),
+                    })
+                    await graph.sync_edge_to_db(db, src_id, tgt_id, {
+                        "relation_type": rel["type"],
+                        "weight": 1.0,
+                        "confidence": rel.get("confidence", 0.5),
+                        "evidence_video_bvid": source_id,
+                        "evidence_segment_id": rel.get("_segment_id"),
+                        "session_id": request.session_id,
+                    })
+
+            graph.save_json()
+            node_count = len(entities)
+
+        for seg in segment_records:
+            seg.extraction_status = "done"
+        cache.extraction_status = "done"
+        cache.knowledge_node_count = node_count
+
+    except Exception as e:
+        logger.warning(f"[{source_id}] 知识抽取失败: {e}")
+
+    await db.commit()
+
+    return ImportUrlResponse(
+        source_id=source_id,
+        source_type=source_type_str,
+        title=content.title,
+        content_length=len(content.content),
+        segment_count=len(segments_data),
+        node_count=node_count,
+    )
+
+
+@router.post("/build-communities")
+async def build_communities(
+    force: bool = Query(False, description="强制重建社区"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    运行 GraphRAG 社区检测 + 生成社区摘要
+
+    在知识库构建完成后调用，为 RAG 问答提供图谱级上下文增强
+    """
+    try:
+        graph = get_graph()
+        if graph.node_count() == 0:
+            await graph.load_from_db(db)
+
+        graph_rag = get_graph_rag_service()
+        result = await graph_rag.build_communities(force=force)
+        return result
+    except Exception as e:
+        logger.error(f"社区构建失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
