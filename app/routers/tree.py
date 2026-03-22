@@ -15,7 +15,7 @@ from app.models import (
     TreeNodeInfo, NodeDetailInfo, VideoDetailInfo, SegmentInfo, _fmt_time,
 )
 from app.services.graph_store import GraphStore
-from app.services.tree_builder import TreeBuilder
+from app.services.tree_builder import TreeBuilder, _is_noise_name, _compute_grade
 from app.services.path_recommender import PathRecommender
 from app.config import settings
 
@@ -45,19 +45,32 @@ def get_path_recommender() -> PathRecommender:
     return PathRecommender(get_graph_store())
 
 
+def _get_community_ids() -> dict[int, int]:
+    """获取社区 ID 映射（如果已构建）"""
+    try:
+        from app.routers.knowledge import get_graph_rag_service
+        graph_rag = get_graph_rag_service()
+        if graph_rag.is_built:
+            return graph_rag.get_all_community_ids()
+    except Exception:
+        pass
+    return {}
+
+
 @router.get("")
 async def get_knowledge_tree(
     min_confidence: Optional[float] = Query(None, description="最低置信度"),
     topic_id: Optional[int] = Query(None, description="按主题筛选（只返回该主题子树）"),
     stage: Optional[str] = Query(None, description="按难度阶段筛选: beginner/intermediate/advanced"),
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
     db: AsyncSession = Depends(get_db),
 ):
     """获取完整知识树结构（支持主题筛选和阶段筛选）"""
     try:
         gs = get_graph_store()
-        # 如果图为空，从 DB 加载
-        if gs.node_count() == 0:
-            await gs.load_from_db(db)
+        # 如果图为空或指定了 session_id，从 DB 加载（按 session 过滤）
+        if gs.node_count() == 0 or session_id:
+            await gs.load_from_db(db, session_id=session_id)
 
         builder = get_tree_builder()
         tree_data = builder.build_tree(min_confidence=min_confidence)
@@ -84,13 +97,111 @@ async def get_knowledge_tree(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/graph")
+async def get_knowledge_graph(
+    topic_id: Optional[int] = Query(None, description="按主题筛选子图"),
+    min_confidence: Optional[float] = Query(None, description="最低置信度"),
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取完整知识图谱数据（适配 3D force-graph 可视化）"""
+    try:
+        gs = get_graph_store()
+        if gs.node_count() == 0 or session_id:
+            await gs.load_from_db(db, session_id=session_id)
+
+        threshold = min_confidence or settings.tree_min_confidence
+
+        # 获取社区映射
+        community_map = _get_community_ids()
+
+        # 收集并过滤节点
+        all_nodes = gs.all_nodes()
+        nodes = []
+        valid_ids = set()
+
+        for n in all_nodes:
+            if n.get("review_status") == "rejected":
+                continue
+            if n.get("confidence", 0) < threshold:
+                continue
+            if _is_noise_name(n.get("name", "")):
+                continue
+            valid_ids.add(n["id"])
+            grade = _compute_grade(n)
+            node_data = {
+                "id": n["id"],
+                "name": n.get("name", ""),
+                "node_type": n.get("node_type", "concept"),
+                "difficulty": n.get("difficulty", 1),
+                "confidence": round(n.get("confidence", 0.5), 2),
+                "source_count": n.get("source_count", 1),
+                "definition": n.get("definition", ""),
+                "grade": grade,
+                "val": max(1, n.get("source_count", 1)),
+            }
+            if n["id"] in community_map:
+                node_data["community_id"] = community_map[n["id"]]
+            nodes.append(node_data)
+
+        # 如果指定了 topic_id，只保留该主题的子图节点
+        if topic_id is not None:
+            subgraph_ids = set()
+            _collect_subtree_ids(gs, topic_id, subgraph_ids, valid_ids)
+            subgraph_ids.add(topic_id)
+            nodes = [n for n in nodes if n["id"] in subgraph_ids]
+            valid_ids = subgraph_ids & valid_ids
+
+        # 收集边（只保留两端都在 valid_ids 中的边）
+        links = []
+        if gs.graph is not None:
+            for src, tgt, data in gs.graph.edges(data=True):
+                if src in valid_ids and tgt in valid_ids:
+                    links.append({
+                        "source": src,
+                        "target": tgt,
+                        "relation_type": data.get("relation_type", "related_to"),
+                        "weight": round(data.get("weight", 1.0), 2),
+                        "confidence": round(data.get("confidence", 0.5), 2),
+                    })
+
+        return {
+            "nodes": nodes,
+            "links": links,
+            "stats": {
+                "node_count": len(nodes),
+                "link_count": len(links),
+            }
+        }
+    except Exception as e:
+        logger.error(f"获取知识图谱失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _collect_subtree_ids(gs: GraphStore, parent_id: int, collected: set, valid_ids: set, depth: int = 0):
+    """递归收集子树中的所有节点 ID"""
+    if depth > 10:
+        return
+    children = gs.get_children(parent_id)
+    for child in children:
+        cid = child["id"]
+        if cid in valid_ids and cid not in collected:
+            collected.add(cid)
+            _collect_subtree_ids(gs, cid, collected, valid_ids, depth + 1)
+
+
 @router.get("/topics")
-async def get_topics(db: AsyncSession = Depends(get_db)):
+async def get_topics(
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
+    db: AsyncSession = Depends(get_db),
+):
     """获取一级主题列表"""
     try:
+        query = select(KnowledgeNode).where(KnowledgeNode.node_type == "topic")
+        if session_id:
+            query = query.where(KnowledgeNode.session_id == session_id)
         result = await db.execute(
-            select(KnowledgeNode).where(KnowledgeNode.node_type == "topic")
-            .order_by(KnowledgeNode.source_count.desc())
+            query.order_by(KnowledgeNode.source_count.desc())
         )
         topics = result.scalars().all()
         return [
@@ -110,18 +221,23 @@ async def get_topics(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/node/{node_id}")
-async def get_node_detail(node_id: int, db: AsyncSession = Depends(get_db)):
+async def get_node_detail(
+    node_id: int,
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
+    db: AsyncSession = Depends(get_db),
+):
     """获取知识节点详情"""
-    result = await db.execute(
-        select(KnowledgeNode).where(KnowledgeNode.id == node_id)
-    )
+    node_query = select(KnowledgeNode).where(KnowledgeNode.id == node_id)
+    if session_id:
+        node_query = node_query.where(KnowledgeNode.session_id == session_id)
+    result = await db.execute(node_query)
     node = result.scalar_one_or_none()
     if not node:
         raise HTTPException(status_code=404, detail="节点不存在")
 
     gs = get_graph_store()
-    if gs.node_count() == 0:
-        await gs.load_from_db(db)
+    if gs.node_count() == 0 or session_id:
+        await gs.load_from_db(db, session_id=session_id)
 
     # 主归属
     main_topic = None
@@ -211,11 +327,16 @@ async def get_node_detail(node_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/video/{bvid}")
-async def get_video_detail(bvid: str, db: AsyncSession = Depends(get_db)):
+async def get_video_detail(
+    bvid: str,
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
+    db: AsyncSession = Depends(get_db),
+):
     """获取视频详情（知识点 + 时间片段 + 树中位置）"""
-    result = await db.execute(
-        select(VideoCache).where(VideoCache.bvid == bvid)
-    )
+    video_query = select(VideoCache).where(VideoCache.bvid == bvid)
+    if session_id:
+        video_query = video_query.where(VideoCache.session_id == session_id)
+    result = await db.execute(video_query)
     video = result.scalar_one_or_none()
     if not video:
         raise HTTPException(status_code=404, detail="视频不存在")
@@ -254,8 +375,8 @@ async def get_video_detail(bvid: str, db: AsyncSession = Depends(get_db)):
 
             # 树中位置
             gs = get_graph_store()
-            if gs.node_count() == 0:
-                await gs.load_from_db(db)
+            if gs.node_count() == 0 or session_id:
+                await gs.load_from_db(db, session_id=session_id)
             builder = get_tree_builder()
             position = builder.get_node_tree_position(kn.id)
 
@@ -301,7 +422,11 @@ async def get_video_detail(bvid: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/node/{node_id}/segments")
-async def get_node_segments(node_id: int, db: AsyncSession = Depends(get_db)):
+async def get_node_segments(
+    node_id: int,
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
+    db: AsyncSession = Depends(get_db),
+):
     """获取节点关联的所有片段"""
     links_result = await db.execute(
         select(NodeSegmentLink).where(NodeSegmentLink.node_id == node_id)
@@ -339,12 +464,13 @@ async def get_learning_path(
     node_id: int,
     mode: str = Query("standard", description="beginner / standard / quick"),
     known: Optional[str] = Query(None, description="Comma-separated known node IDs"),
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
     db: AsyncSession = Depends(get_db),
 ):
     """生成学习路径推荐"""
     gs = get_graph_store()
-    if gs.node_count() == 0:
-        await gs.load_from_db(db)
+    if gs.node_count() == 0 or session_id:
+        await gs.load_from_db(db, session_id=session_id)
 
     if not gs.has_node(node_id):
         raise HTTPException(status_code=404, detail="Node not found")
@@ -413,22 +539,41 @@ async def get_learning_path(
 
 
 @router.get("/stats")
-async def get_tree_stats(db: AsyncSession = Depends(get_db)):
+async def get_tree_stats(
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
+    db: AsyncSession = Depends(get_db),
+):
     """获取知识树统计"""
-    node_count = await db.scalar(select(func.count()).select_from(KnowledgeNode))
-    edge_count = await db.scalar(select(func.count()).select_from(KnowledgeEdge))
-    segment_count = await db.scalar(select(func.count()).select_from(Segment))
-    topic_count = await db.scalar(
-        select(func.count()).select_from(KnowledgeNode)
-        .where(KnowledgeNode.node_type == "topic")
-    )
-    pending_count = await db.scalar(
-        select(func.count()).select_from(KnowledgeNode)
-        .where(KnowledgeNode.review_status == "pending_review")
-    )
-    video_count = await db.scalar(
-        select(func.count(func.distinct(Segment.video_bvid))).select_from(Segment)
-    )
+    if session_id:
+        node_count = await db.scalar(select(func.count()).select_from(KnowledgeNode).where(KnowledgeNode.session_id == session_id))
+        edge_count = await db.scalar(select(func.count()).select_from(KnowledgeEdge).where(KnowledgeEdge.session_id == session_id))
+        segment_count = await db.scalar(select(func.count()).select_from(Segment).where(Segment.session_id == session_id))
+        topic_count = await db.scalar(
+            select(func.count()).select_from(KnowledgeNode)
+            .where(KnowledgeNode.node_type == "topic", KnowledgeNode.session_id == session_id)
+        )
+        pending_count = await db.scalar(
+            select(func.count()).select_from(KnowledgeNode)
+            .where(KnowledgeNode.review_status == "pending_review", KnowledgeNode.session_id == session_id)
+        )
+        video_count = await db.scalar(
+            select(func.count(func.distinct(Segment.video_bvid))).select_from(Segment).where(Segment.session_id == session_id)
+        )
+    else:
+        node_count = await db.scalar(select(func.count()).select_from(KnowledgeNode))
+        edge_count = await db.scalar(select(func.count()).select_from(KnowledgeEdge))
+        segment_count = await db.scalar(select(func.count()).select_from(Segment))
+        topic_count = await db.scalar(
+            select(func.count()).select_from(KnowledgeNode)
+            .where(KnowledgeNode.node_type == "topic")
+        )
+        pending_count = await db.scalar(
+            select(func.count()).select_from(KnowledgeNode)
+            .where(KnowledgeNode.review_status == "pending_review")
+        )
+        video_count = await db.scalar(
+            select(func.count(func.distinct(Segment.video_bvid))).select_from(Segment)
+        )
 
     return {
         "total_nodes": node_count or 0,
@@ -443,14 +588,15 @@ async def get_tree_stats(db: AsyncSession = Depends(get_db)):
 @router.get("/pending")
 async def get_pending_nodes(
     limit: int = Query(50, le=200),
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
     db: AsyncSession = Depends(get_db),
 ):
     """获取待审核节点列表"""
+    query = select(KnowledgeNode).where(KnowledgeNode.review_status == "pending_review")
+    if session_id:
+        query = query.where(KnowledgeNode.session_id == session_id)
     result = await db.execute(
-        select(KnowledgeNode)
-        .where(KnowledgeNode.review_status == "pending_review")
-        .order_by(KnowledgeNode.source_count.desc())
-        .limit(limit)
+        query.order_by(KnowledgeNode.source_count.desc()).limit(limit)
     )
     nodes = result.scalars().all()
     return [
@@ -470,6 +616,7 @@ async def get_pending_nodes(
 async def review_node(
     node_id: int,
     action: str = Query(..., description="approve 或 reject"),
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
     db: AsyncSession = Depends(get_db),
 ):
     """审核知识节点"""
