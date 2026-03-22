@@ -1,7 +1,7 @@
 """
-Bilibili RAG 知识库系统
+BiliMind 知识树导航系统
 
-RAG 服务模块 - 向量存储与问答
+RAG 服务模块 - 向量存储与检索增强问答
 """
 from typing import List, Optional
 from loguru import logger
@@ -38,44 +38,41 @@ class RAGService:
         # 初始化 Embeddings — 三级降级策略
         self.embeddings = None
 
-        # 1) 尝试 DashScope
-        try:
-            from langchain_community.embeddings import DashScopeEmbeddings
-            self.embeddings = DashScopeEmbeddings(
-                dashscope_api_key=settings.openai_api_key,
-                model=settings.embedding_model
-            )
-            # 快速验证是否可用
-            self.embeddings.embed_query("test")
-            logger.info("使用 DashScopeEmbeddings 初始化成功")
-        except Exception as e:
-            logger.info(f"DashScopeEmbeddings 不可用: {e}")
-            self.embeddings = None
-
-        # 2) 尝试 OpenAI 兼容接口
-        if self.embeddings is None:
+        # 如果配置为 local，直接使用 ChromaDB 默认本地模型，跳过远程调用
+        if getattr(settings, 'embedding_model', '') == 'local':
+            logger.info("EMBEDDING_MODEL=local，使用 ChromaDB 默认本地 Embedding (all-MiniLM-L6-v2)")
+        else:
+            # 1) 尝试 DashScope
             try:
-                self.embeddings = OpenAIEmbeddings(
-                    api_key=settings.openai_api_key,
-                    base_url=settings.openai_base_url,
-                    model=settings.embedding_model,
-                    check_embedding_ctx_length=False
+                from langchain_community.embeddings import DashScopeEmbeddings
+                self.embeddings = DashScopeEmbeddings(
+                    dashscope_api_key=settings.openai_api_key,
+                    model=settings.embedding_model
                 )
                 self.embeddings.embed_query("test")
-                logger.info("使用 OpenAIEmbeddings 初始化成功")
+                logger.info("使用 DashScopeEmbeddings 初始化成功")
             except Exception as e:
-                logger.info(f"OpenAIEmbeddings 不可用: {e}")
+                logger.info(f"DashScopeEmbeddings 不可用: {e}")
                 self.embeddings = None
 
-        # 3) Fallback: 本地 sentence-transformers (ChromaDB 默认)
-        if self.embeddings is None:
-            try:
-                from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+            # 2) 尝试 OpenAI 兼容接口
+            if self.embeddings is None:
+                try:
+                    self.embeddings = OpenAIEmbeddings(
+                        api_key=settings.openai_api_key,
+                        base_url=settings.openai_base_url,
+                        model=settings.embedding_model,
+                        check_embedding_ctx_length=False
+                    )
+                    self.embeddings.embed_query("test")
+                    logger.info("使用 OpenAIEmbeddings 初始化成功")
+                except Exception as e:
+                    logger.info(f"OpenAIEmbeddings 不可用: {e}")
+                    self.embeddings = None
+
+            # 3) Fallback: 本地 sentence-transformers
+            if self.embeddings is None:
                 logger.info("使用 ChromaDB 默认本地 Embedding (all-MiniLM-L6-v2)")
-            except Exception:
-                pass
-            # Chroma 不传 embedding_function 时会自动使用默认模型
-            self.embeddings = None
         
         # 初始化向量存储
         chroma_kwargs = {
@@ -148,15 +145,16 @@ class RAGService:
     def add_video_content(self, video: VideoContent) -> int:
         """
         添加单个视频内容到向量库
-        
+
         Args:
             video: VideoContent 对象
-            
+
         Returns:
             添加的文档块数量
         """
         # 构建完整内容（正文不带标题，避免标题相似度主导召回）
         title = video.title or "未知标题"
+        session_id = getattr(video, 'session_id', None) or ""
         content_parts: List[str] = []
         
         if video.content and video.content.strip():
@@ -205,7 +203,8 @@ class RAGService:
                     "title": title,
                     "source": video.source.value,
                     "chunk_index": i,
-                    "url": f"https://www.bilibili.com/video/{video.bvid}"
+                    "url": f"https://www.bilibili.com/video/{video.bvid}",
+                    "session_id": session_id,
                 }
             )
             documents.append(doc)
@@ -256,19 +255,31 @@ class RAGService:
             "chunks": total_chunks
         }
     
-    def search(self, query: str, k: int = 5, bvids: Optional[List[str]] = None) -> List[Document]:
+    def search(self, query: str, k: int = 5, bvids: Optional[List[str]] = None, rerank: bool = True, session_id: Optional[str] = None) -> List[Document]:
         """
-        检索相关内容
+        检索相关内容，可选 LLM re-ranking
         """
         if not query or not query.strip():
             logger.warning("检索查询为空")
             return []
-            
+
         try:
-            if bvids:
-                docs = self.vectorstore.similarity_search(query, k=k, filter={"bvid": {"$in": bvids}})
+            # 多召回用于 re-ranking
+            fetch_k = k * 3 if rerank else k
+
+            # Build filter
+            filter_dict = {}
+            if bvids and session_id:
+                filter_dict = {"$and": [{"bvid": {"$in": bvids}}, {"session_id": session_id}]}
+            elif bvids:
+                filter_dict = {"bvid": {"$in": bvids}}
+            elif session_id:
+                filter_dict = {"session_id": session_id}
+
+            if filter_dict:
+                docs = self.vectorstore.similarity_search(query, k=fetch_k, filter=filter_dict)
             else:
-                docs = self.vectorstore.similarity_search(query, k=k)
+                docs = self.vectorstore.similarity_search(query, k=fetch_k)
 
             logger.info(f"检索完成：query='{query}'，召回={len(docs)}")
             for idx, doc in enumerate(docs):
@@ -279,10 +290,72 @@ class RAGService:
                 preview = doc.page_content[:120].replace("\n", " ").strip()
                 logger.info(f"召回[{idx+1}] {bvid} #{chunk_index} {title} | {preview}")
 
+            # LLM Re-ranking
+            if rerank and len(docs) > k:
+                docs = self._rerank_docs(query, docs, k)
+
             return docs
         except Exception as e:
             logger.warning(f"向量检索失败: {e}")
             return []
+
+    def _rerank_docs(self, query: str, docs: List[Document], top_k: int) -> List[Document]:
+        """使用 LLM 对召回文档进行相关性重排序"""
+        try:
+            from openai import OpenAI
+            client = OpenAI(
+                api_key=settings.openai_api_key,
+                base_url=settings.openai_base_url,
+            )
+
+            # 构建评分请求
+            doc_descriptions = []
+            for i, doc in enumerate(docs[:top_k * 2]):  # 最多评估 top_k*2 个
+                preview = doc.page_content[:200].replace("\n", " ").strip()
+                title = doc.metadata.get("title", "")
+                doc_descriptions.append(f"[{i}] 【{title}】{preview}")
+
+            prompt = (
+                f"用户问题：{query}\n\n"
+                f"以下是候选文档片段，请按与问题的相关性从高到低排序，输出编号列表（如 0,3,1,2）：\n\n"
+                + "\n".join(doc_descriptions)
+                + "\n\n只输出编号，用逗号分隔。"
+            )
+
+            resp = client.chat.completions.create(
+                model=settings.llm_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=100,
+            )
+            text = (resp.choices[0].message.content or "").strip()
+
+            # 解析排序结果
+            import re
+            indices = [int(x) for x in re.findall(r"\d+", text)]
+            reranked = []
+            seen = set()
+            for idx in indices:
+                if idx < len(docs) and idx not in seen:
+                    reranked.append(docs[idx])
+                    seen.add(idx)
+                    if len(reranked) >= top_k:
+                        break
+
+            # 补充未被排序到的文档
+            if len(reranked) < top_k:
+                for i, doc in enumerate(docs):
+                    if i not in seen:
+                        reranked.append(doc)
+                        if len(reranked) >= top_k:
+                            break
+
+            logger.info(f"Re-ranking 完成：{len(docs)} -> {len(reranked)} 文档")
+            return reranked
+
+        except Exception as e:
+            logger.warning(f"Re-ranking 失败，返回原始结果: {e}")
+            return docs[:top_k]
     
     async def _fallback_answer(self, question: str, reason: str = "") -> dict:
         """
@@ -315,7 +388,7 @@ class RAGService:
                 "sources": []
             }
 
-    async def answer_question(self, question: str, k: int = 5, bvids: Optional[List[str]] = None) -> dict:
+    async def answer_question(self, question: str, k: int = 5, bvids: Optional[List[str]] = None, session_id: Optional[str] = None) -> dict:
         """
         回答问题
         
@@ -338,7 +411,7 @@ class RAGService:
         
         # 检索相关文档
         try:
-            docs = self.search(question, k=k, bvids=bvids if bvids else None)
+            docs = self.search(question, k=k, bvids=bvids if bvids else None, session_id=session_id)
         except Exception as e:
             logger.error(f"检索失败: {e}")
             return await self._fallback_answer(question, f"检索时遇到问题")
