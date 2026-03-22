@@ -155,22 +155,39 @@ class KnowledgeExtractor:
     # ==================== LLM 抽取 ====================
 
     async def _extract_with_llm(self, segment_text: str, video_title: str) -> dict:
-        """使用 LLM 抽取"""
+        """使用 LLM 抽取（带超时和重试）"""
+        # 跳过过短文本
+        if len(segment_text.strip()) < 50:
+            logger.debug(f"文本过短({len(segment_text)}字)，跳过 LLM 抽取")
+            return {"entities": [], "relations": []}
+
         prompt = EXTRACTION_PROMPT.format(
             video_title=video_title,
             segment_text=segment_text[:3000],
         )
 
-        response = await self.client.chat.completions.create(
-            model=settings.llm_model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=2000,
-        )
+        last_error = None
+        for attempt in range(2):  # 最多重试 1 次
+            try:
+                response = await self.client.chat.completions.create(
+                    model=settings.llm_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=2000,
+                    timeout=30,  # 30 秒超时
+                )
+                raw = response.choices[0].message.content.strip()
+                parsed = self._parse_llm_output(raw)
+                return parsed
+            except Exception as e:
+                last_error = e
+                if attempt == 0:
+                    logger.warning(f"LLM 抽取失败(尝试{attempt+1})，重试: {e}")
+                    import asyncio
+                    await asyncio.sleep(1)
 
-        raw = response.choices[0].message.content.strip()
-        parsed = self._parse_llm_output(raw)
-        return parsed
+        logger.warning(f"LLM 抽取最终失败: {last_error}")
+        return {"entities": [], "relations": []}
 
     def _parse_llm_output(self, raw: str) -> dict:
         """解析 LLM JSON 输出"""

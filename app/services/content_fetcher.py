@@ -13,10 +13,33 @@ import subprocess
 import time
 import httpx
 from loguru import logger
-from app.models import VideoContent, ContentSource
+from app.models import VideoContent, ContentSource, SourceType
 from app.config import settings
 from app.services.bilibili import BilibiliService
 from app.services.asr import ASRService
+
+
+def identify_platform(url: str) -> tuple[str, dict]:
+    """
+    识别 URL 对应的平台和关键参数
+
+    Returns:
+        (platform, params) — platform: "bilibili"/"xiaohongshu"/"zhihu", params: 解析出的ID等
+    """
+    import re
+    if "bilibili.com" in url or "b23.tv" in url:
+        m = re.search(r'/(BV[a-zA-Z0-9]+)', url)
+        bvid = m.group(1) if m else None
+        return "bilibili", {"bvid": bvid}
+    elif "xiaohongshu.com" in url or "xhslink.com" in url:
+        from app.services.xiaohongshu import XiaohongshuService
+        note_id = XiaohongshuService.extract_note_id(url)
+        return "xiaohongshu", {"note_id": note_id, "url": url}
+    elif "zhihu.com" in url or "zhuanlan.zhihu.com" in url:
+        from app.services.zhihu import ZhihuService
+        parsed = ZhihuService.parse_url(url)
+        return "zhihu", parsed or {}
+    return "unknown", {}
 
 
 class ContentFetcher:
@@ -35,6 +58,92 @@ class ContentFetcher:
         self.bili = bilibili_service
         self.asr = asr_service
         self.segment_merge_seconds = settings.extraction_segment_merge_seconds
+
+    async def fetch_from_url(self, url: str) -> tuple[VideoContent, list[dict]]:
+        """
+        统一 URL 入口：自动识别平台，获取内容和 segments
+
+        Returns:
+            (VideoContent, segments_list)
+        """
+        platform, params = identify_platform(url)
+
+        if platform == "bilibili":
+            bvid = params.get("bvid")
+            if not bvid:
+                raise ValueError(f"无法从 URL 解析 B站 bvid: {url}")
+            content = await self.fetch_content(bvid)
+            segments = await self.fetch_segments(bvid)
+            return content, segments
+
+        elif platform == "xiaohongshu":
+            from app.services.xiaohongshu import XiaohongshuService
+            xhs = XiaohongshuService()
+            try:
+                note_id = params.get("note_id")
+                if not note_id and "xhslink.com" in url:
+                    resolved = await xhs.resolve_short_url(url)
+                    if resolved:
+                        note_id = XiaohongshuService.extract_note_id(resolved)
+                if not note_id:
+                    raise ValueError(f"无法从 URL 解析小红书 note_id: {url}")
+
+                note = await xhs.fetch_note(note_id)
+                if not note:
+                    raise ValueError(f"获取小红书笔记失败: {note_id}")
+
+                segments = xhs.to_segments(note)
+                content = VideoContent(
+                    bvid=note_id,
+                    title=note.get("title", ""),
+                    content=note.get("content", ""),
+                    source=ContentSource.SUBTITLE,
+                    source_type=SourceType.XIAOHONGSHU,
+                )
+                return content, segments
+            finally:
+                await xhs.close()
+
+        elif platform == "zhihu":
+            from app.services.zhihu import ZhihuService
+            zhihu = ZhihuService()
+            try:
+                content_type = params.get("type")
+                data = None
+
+                if content_type == "article":
+                    data = await zhihu.fetch_article(params["article_id"])
+                    source_id = params["article_id"]
+                elif content_type == "answer":
+                    data = await zhihu.fetch_answer(params["answer_id"])
+                    source_id = params["answer_id"]
+                elif content_type == "question":
+                    data = await zhihu.fetch_question_top_answer(params["question_id"])
+                    source_id = params["question_id"]
+                else:
+                    raise ValueError(f"无法解析知乎 URL: {url}")
+
+                if not data:
+                    raise ValueError(f"获取知乎内容失败: {url}")
+
+                source_id = data.get("source_id", source_id)
+                segments = zhihu.to_segments(
+                    data.get("content_html", ""),
+                    data.get("content", ""),
+                )
+                content = VideoContent(
+                    bvid=source_id,
+                    title=data.get("title", ""),
+                    content=data.get("content", ""),
+                    source=ContentSource.SUBTITLE,
+                    source_type=SourceType.ZHIHU,
+                )
+                return content, segments
+            finally:
+                await zhihu.close()
+
+        else:
+            raise ValueError(f"不支持的平台 URL: {url}")
 
     async def fetch_content(self, bvid: str, cid: int = None, title: str = None) -> VideoContent:
         """获取视频内容（兼容旧接口），自动降级"""
@@ -438,37 +547,3 @@ class ContentFetcher:
             logger.info(f"[{bvid}] Recognition ASR 成功，长度={len(text)}，预览：{preview}")
         return text
 
-    async def _try_asr_with_local_audio(
-        self, bvid: str, cid: int, audio_url: str
-    ) -> Optional[str]:
-        """本地下载后使用 Recognition 直传"""
-        tmp_dir = os.path.join("data", "asr_tmp")
-        os.makedirs(tmp_dir, exist_ok=True)
-
-        try:
-            parsed = urlparse(audio_url)
-            ext = os.path.splitext(parsed.path)[1] or ".m4s"
-        except Exception:
-            ext = ".m4s"
-
-        filename = f"{bvid}_{cid}_{int(time.time())}{ext}"
-        file_path = os.path.join(tmp_dir, filename)
-
-        ok = await self.bili.download_audio_to_file(audio_url, file_path)
-        if not ok:
-            logger.info(f"[{bvid}] 本地下载音频失败")
-            return None
-
-        if os.path.exists(file_path) and os.path.getsize(file_path) < 1024:
-            logger.info(f"[{bvid}] 本地音频文件过小，跳过上传")
-            try:
-                os.remove(file_path)
-            except Exception:
-                pass
-            return None
-
-        text = await self.asr.transcribe_local_file(file_path)
-        if text:
-            preview = text[:120].replace("\n", " ").strip()
-            logger.info(f"[{bvid}] Recognition ASR(local) 成功，长度={len(text)}，预览：{preview}")
-        return text
