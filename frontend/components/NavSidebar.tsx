@@ -10,7 +10,9 @@ export default function NavSidebar() {
     { href: "/tree", label: "知识树", icon: "tree", primary: true },
     { href: "/learning-path", label: "学习路径", icon: "path", primary: true },
     { href: "/search", label: "搜索", icon: "search", primary: false },
-    { href: "/chat", label: "辅助问答", icon: "chat", primary: false },
+    { href: "/chat", label: "知识问答", icon: "chat", primary: false },
+    { href: "/game", label: "知识挑战", icon: "game", primary: false },
+    { href: "/review", label: "间隔复习", icon: "review", primary: false },
   ];
 
   const icons: Record<string, React.ReactNode> = {
@@ -40,6 +42,20 @@ export default function NavSidebar() {
     chat: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+      </svg>
+    ),
+    game: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="2" y="6" width="20" height="12" rx="3" />
+        <circle cx="9" cy="12" r="2" />
+        <path d="M15 10v4M13 12h4" />
+      </svg>
+    ),
+    review: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7v5l3 3" />
+        <path d="M16.5 3.5l1 2M7.5 3.5l-1 2" />
       </svg>
     ),
   };
