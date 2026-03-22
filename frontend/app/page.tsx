@@ -1,9 +1,55 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import LoginModal from "@/components/LoginModal";
 import DemoFlowModal from "@/components/DemoFlowModal";
 import { UserInfo } from "@/lib/api";
+import dynamic from "next/dynamic";
+
+// 动态导入 ForceGraph3D（避免 SSR）
+const ForceGraph3D = dynamic(() => import("react-force-graph-3d"), {
+  ssr: false,
+  loading: () => null,
+});
+
+// 示例图谱数据（供未登录用户展示）
+const DEMO_GRAPH = {
+  nodes: [
+    { id: 1, name: "机器学习", node_type: "topic", val: 6 },
+    { id: 2, name: "深度学习", node_type: "concept", val: 5 },
+    { id: 3, name: "神经网络", node_type: "concept", val: 4 },
+    { id: 4, name: "CNN", node_type: "method", val: 3 },
+    { id: 5, name: "RNN", node_type: "method", val: 3 },
+    { id: 6, name: "Transformer", node_type: "method", val: 5 },
+    { id: 7, name: "注意力机制", node_type: "concept", val: 4 },
+    { id: 8, name: "PyTorch", node_type: "tool", val: 3 },
+    { id: 9, name: "TensorFlow", node_type: "tool", val: 3 },
+    { id: 10, name: "自然语言处理", node_type: "topic", val: 4 },
+    { id: 11, name: "计算机视觉", node_type: "topic", val: 4 },
+    { id: 12, name: "强化学习", node_type: "concept", val: 3 },
+    { id: 13, name: "监督学习", node_type: "concept", val: 3 },
+    { id: 14, name: "无监督学习", node_type: "concept", val: 3 },
+    { id: 15, name: "大语言模型", node_type: "concept", val: 5 },
+    { id: 16, name: "GPT", node_type: "tool", val: 4 },
+    { id: 17, name: "BERT", node_type: "method", val: 3 },
+    { id: 18, name: "图像分类", node_type: "task", val: 2 },
+    { id: 19, name: "目标检测", node_type: "task", val: 2 },
+    { id: 20, name: "文本生成", node_type: "task", val: 3 },
+  ],
+  links: [
+    { source: 1, target: 2 }, { source: 1, target: 12 }, { source: 1, target: 13 },
+    { source: 1, target: 14 }, { source: 2, target: 3 }, { source: 3, target: 4 },
+    { source: 3, target: 5 }, { source: 3, target: 6 }, { source: 6, target: 7 },
+    { source: 2, target: 8 }, { source: 2, target: 9 }, { source: 1, target: 10 },
+    { source: 1, target: 11 }, { source: 6, target: 15 }, { source: 15, target: 16 },
+    { source: 10, target: 17 }, { source: 10, target: 20 }, { source: 11, target: 4 },
+    { source: 11, target: 18 }, { source: 11, target: 19 }, { source: 15, target: 20 },
+  ],
+};
+
+const NODE_COLORS: Record<string, string> = {
+  topic: "#059669", concept: "#3b82f6", method: "#8b5cf6", tool: "#f59e0b", task: "#ef4444",
+};
 
 export default function Home() {
   const [showLogin, setShowLogin] = useState(false);
@@ -26,8 +72,29 @@ export default function Home() {
 
   return (
     <div className="landing-page">
+      {/* 3D 图谱背景 */}
+      <div className="graph3d-bg">
+        <ForceGraph3D
+          graphData={DEMO_GRAPH}
+          nodeColor={(node: any) => NODE_COLORS[node.node_type] || "#6b7280"}
+          nodeVal={(node: any) => node.val}
+          nodeRelSize={4}
+          nodeOpacity={0.7}
+          linkColor={() => "rgba(148, 163, 184, 0.2)"}
+          linkWidth={0.5}
+          linkOpacity={0.3}
+          backgroundColor="rgba(0,0,0,0)"
+          showNavInfo={false}
+          enableNavigationControls={false}
+          enableNodeDrag={false}
+          cooldownTicks={100}
+          width={typeof window !== "undefined" ? window.innerWidth : 1200}
+          height={typeof window !== "undefined" ? window.innerHeight : 800}
+        />
+      </div>
+
       {/* 顶栏 */}
-      <header className="landing-topbar">
+      <header className="landing-topbar" style={{ position: "relative", zIndex: 10 }}>
         <div className="landing-brand">
           <div className="landing-logo">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
@@ -45,7 +112,7 @@ export default function Home() {
       </header>
 
       {/* 主视觉区 */}
-      <main className="landing-main">
+      <main className="landing-main" style={{ position: "relative", zIndex: 10 }}>
         <div className="landing-hero">
           <div className="landing-hero-badge">个人视频知识导航系统</div>
           <h1 className="landing-hero-title">
@@ -135,7 +202,7 @@ export default function Home() {
         </div>
       </main>
 
-      <footer className="landing-footer">
+      <footer className="landing-footer" style={{ position: "relative", zIndex: 10 }}>
         <p>BiliMind © 2026 · 个人视频知识导航系统</p>
       </footer>
 
