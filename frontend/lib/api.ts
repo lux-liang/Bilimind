@@ -8,6 +8,12 @@ export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (
     : "http://localhost:8000"
 );
 
+// 获取 localStorage 中的 session_id
+export function getSessionId(): string | null {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem('bili_session');
+}
+
 // 通用请求函数
 async function request<T>(
     endpoint: string,
@@ -163,6 +169,20 @@ export interface ChatResponse {
     }>;
 }
 
+export interface ImportUrlRequest {
+    url: string;
+    session_id?: string;
+}
+
+export interface ImportUrlResponse {
+    source_id: string;
+    source_type: string;
+    title: string;
+    content_length: number;
+    segment_count: number;
+    node_count: number;
+}
+
 // ==================== API 函数 ====================
 
 // 认证相关
@@ -241,7 +261,12 @@ export const favoritesApi = {
 // 知识库相关
 export const knowledgeApi = {
     // 获取统计信息
-    getStats: () => request<KnowledgeStats>("/knowledge/stats"),
+    getStats: () => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        return request<KnowledgeStats>(`/knowledge/stats?${params.toString()}`);
+    },
 
     // 构建知识库
     build: (data: BuildRequest, sessionId: string) =>
@@ -254,8 +279,12 @@ export const knowledgeApi = {
         ),
 
     // 获取构建状态
-    getBuildStatus: (taskId: string) =>
-        request<BuildStatus>(`/knowledge/build/status/${taskId}`),
+    getBuildStatus: (taskId: string) => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        return request<BuildStatus>(`/knowledge/build/status/${taskId}?${params.toString()}`);
+    },
 
     // 获取收藏夹入库状态
     getFolderStatus: (sessionId: string) =>
@@ -272,12 +301,27 @@ export const knowledgeApi = {
         ),
 
     // 清空知识库
-    clear: () =>
-        request<{ message: string }>("/knowledge/clear", { method: "DELETE" }),
+    clear: () => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        return request<{ message: string }>(`/knowledge/clear?${params.toString()}`, { method: "DELETE" });
+    },
 
     // 删除视频
-    deleteVideo: (bvid: string) =>
-        request<{ message: string }>(`/knowledge/video/${bvid}`, { method: "DELETE" }),
+    deleteVideo: (bvid: string) => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        return request<{ message: string }>(`/knowledge/video/${bvid}?${params.toString()}`, { method: "DELETE" });
+    },
+
+    // URL 导入（跨平台）
+    importUrl: (url: string, sessionId?: string) =>
+        request<ImportUrlResponse>("/knowledge/import-url", {
+            method: "POST",
+            body: JSON.stringify({ url, session_id: sessionId }),
+        }),
 };
 
 // 对话相关
@@ -290,11 +334,17 @@ export const chatApi = {
         }),
 
     // 搜索
-    search: (query: string, k = 5) =>
-        request<{ results: Array<{ bvid: string; title: string; url: string; content_preview: string }> }>(
-            `/chat/search?query=${encodeURIComponent(query)}&k=${k}`,
+    search: (query: string, k = 5) => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        params.set("query", query);
+        params.set("k", String(k));
+        return request<{ results: Array<{ bvid: string; title: string; url: string; content_preview: string }> }>(
+            `/chat/search?${params.toString()}`,
             { method: "POST" }
-        ),
+        );
+    },
 };
 
 // ==================== 知识树类型 ====================
@@ -319,6 +369,38 @@ export interface TreeResponse {
         total_nodes: number;
         total_edges: number;
         low_confidence_count: number;
+    };
+}
+
+// ==================== 3D 图谱类型 ====================
+
+export interface GraphNode {
+    id: number;
+    name: string;
+    node_type: string;
+    difficulty: number;
+    confidence: number;
+    source_count: number;
+    definition: string;
+    grade: string;
+    val: number;
+    community_id?: number;
+}
+
+export interface GraphLink {
+    source: number;
+    target: number;
+    relation_type: string;
+    weight: number;
+    confidence: number;
+}
+
+export interface GraphData {
+    nodes: GraphNode[];
+    links: GraphLink[];
+    stats: {
+        node_count: number;
+        link_count: number;
     };
 }
 
@@ -403,36 +485,78 @@ export interface TreeStats {
 export const treeApi = {
     getTree: (opts?: { minConfidence?: number; topicId?: number; stage?: string }) => {
         const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
         if (opts?.minConfidence) params.set("min_confidence", String(opts.minConfidence));
         if (opts?.topicId) params.set("topic_id", String(opts.topicId));
         if (opts?.stage) params.set("stage", opts.stage);
-        const qs = params.toString();
-        return request<TreeResponse>(`/tree${qs ? `?${qs}` : ""}`);
+        return request<TreeResponse>(`/tree?${params.toString()}`);
     },
 
-    getTopics: () =>
-        request<Array<{ id: number; name: string; definition?: string; difficulty: number; source_count: number; confidence: number }>>("/tree/topics"),
+    getGraph: (opts?: { topicId?: number; minConfidence?: number }) => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        if (opts?.topicId) params.set("topic_id", String(opts.topicId));
+        if (opts?.minConfidence) params.set("min_confidence", String(opts.minConfidence));
+        return request<GraphData>(`/tree/graph?${params.toString()}`);
+    },
 
-    getNodeDetail: (nodeId: number) =>
-        request<NodeDetail>(`/tree/node/${nodeId}`),
+    getTopics: () => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        return request<Array<{ id: number; name: string; definition?: string; difficulty: number; source_count: number; confidence: number }>>(`/tree/topics?${params.toString()}`);
+    },
 
-    getVideoDetail: (bvid: string) =>
-        request<VideoDetail>(`/tree/video/${bvid}`),
+    getNodeDetail: (nodeId: number) => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        return request<NodeDetail>(`/tree/node/${nodeId}?${params.toString()}`);
+    },
 
-    getNodeSegments: (nodeId: number) =>
-        request<Array<SegmentRef & { video_bvid: string; url?: string }>>(`/tree/node/${nodeId}/segments`),
+    getVideoDetail: (bvid: string) => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        return request<VideoDetail>(`/tree/video/${bvid}?${params.toString()}`);
+    },
 
-    getStats: () =>
-        request<TreeStats>("/tree/stats"),
+    getNodeSegments: (nodeId: number) => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        return request<Array<SegmentRef & { video_bvid: string; url?: string }>>(`/tree/node/${nodeId}/segments?${params.toString()}`);
+    },
 
-    getPending: (limit = 50) =>
-        request<Array<{ id: number; name: string; node_type: string; definition?: string; confidence: number; source_count: number }>>(`/tree/pending?limit=${limit}`),
+    getStats: () => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        return request<TreeStats>(`/tree/stats?${params.toString()}`);
+    },
 
-    reviewNode: (nodeId: number, action: "approve" | "reject") =>
-        request<{ message: string; review_status: string }>(`/tree/node/${nodeId}/review?action=${action}`, { method: "POST" }),
+    getPending: (limit = 50) => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        params.set("limit", String(limit));
+        return request<Array<{ id: number; name: string; node_type: string; definition?: string; confidence: number; source_count: number }>>(`/tree/pending?${params.toString()}`);
+    },
+
+    reviewNode: (nodeId: number, action: "approve" | "reject") => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        params.set("action", action);
+        return request<{ message: string; review_status: string }>(`/tree/node/${nodeId}/review?${params.toString()}`, { method: "POST" });
+    },
 
     getLearningPath: (nodeId: number, mode: "beginner" | "standard" | "quick" = "standard", knownIds?: number[]) => {
         const params = new URLSearchParams({ mode });
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
         if (knownIds && knownIds.length > 0) params.set("known", knownIds.join(","));
         return request<LearningPathResponse>(`/tree/node/${nodeId}/path?${params.toString()}`);
     },
@@ -503,8 +627,15 @@ export interface SearchResults {
 }
 
 export const searchApi = {
-    search: (q: string, type: string = "all", limit: number = 20) =>
-        request<SearchResults>(`/search?q=${encodeURIComponent(q)}&type=${type}&limit=${limit}`),
+    search: (q: string, type: string = "all", limit: number = 20) => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        params.set("q", q);
+        params.set("type", type);
+        params.set("limit", String(limit));
+        return request<SearchResults>(`/search?${params.toString()}`);
+    },
 };
 
 // ==================== 学习路径独立 API ====================
@@ -521,14 +652,22 @@ export interface PopularTopic {
 
 export const learningPathApi = {
     // 搜索学习目标
-    searchTargets: (q: string, limit = 10) =>
-        request<Array<{ id: number; name: string; node_type: string; difficulty: number; definition?: string; confidence: number; source_count: number }>>(
-            `/learning-path/search?q=${encodeURIComponent(q)}&limit=${limit}`
-        ),
+    searchTargets: (q: string, limit = 10) => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        params.set("q", q);
+        params.set("limit", String(limit));
+        return request<Array<{ id: number; name: string; node_type: string; difficulty: number; definition?: string; confidence: number; source_count: number }>>(
+            `/learning-path/search?${params.toString()}`
+        );
+    },
 
     // 生成学习路径
     generate: (opts: { target?: string; nodeId?: number; mode?: string; known?: number[] }) => {
         const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
         if (opts.target) params.set("target", opts.target);
         if (opts.nodeId) params.set("node_id", String(opts.nodeId));
         if (opts.mode) params.set("mode", opts.mode);
@@ -537,6 +676,11 @@ export const learningPathApi = {
     },
 
     // 获取热门学习目标
-    getPopularTopics: (limit = 20) =>
-        request<PopularTopic[]>(`/learning-path/topics?limit=${limit}`),
+    getPopularTopics: (limit = 20) => {
+        const params = new URLSearchParams();
+        const sid = getSessionId();
+        if (sid) params.set("session_id", sid);
+        params.set("limit", String(limit));
+        return request<PopularTopic[]>(`/learning-path/topics?${params.toString()}`);
+    },
 };
