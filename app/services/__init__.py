@@ -1,5 +1,5 @@
 """
-Bilibili RAG 知识库系统
+BiliMind 知识树导航系统
 
 服务模块初始化
 """

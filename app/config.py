@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     # 数据库
     database_url: str = Field(
-        default="sqlite+aiosqlite:///./data/bilibili_rag.db",
+        default="sqlite+aiosqlite:///./data/bilimind.db",
         env="DATABASE_URL"
     )
 

@@ -3,6 +3,15 @@ BiliMind 知识树学习导航系统
 
 主应用入口
 """
+# ChromaDB requires sqlite3 >= 3.35.0; Rocky Linux 9 ships 3.34.1
+# Use pysqlite3-binary as drop-in replacement when available
+try:
+    import pysqlite3
+    import sys as _sys
+    _sys.modules["sqlite3"] = pysqlite3
+except ImportError:
+    pass
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +24,8 @@ from app.routers import auth, favorites, knowledge, chat
 from app.routers import tree
 from app.routers import search
 from app.routers import learning_path
+from app.routers import game
+from app.routers import srs
 
 
 # 配置日志
@@ -61,7 +72,7 @@ app = FastAPI(
 - **节点详情** - 查看知识点定义、前置/后续、相关视频片段
 - **视频详情** - 查看视频知识点时间线，可追溯到具体秒数
 - **学习路径** - 基于图结构推荐学习顺序
-- **智能问答** - 基于知识图谱 + 向量检索的辅助问答
+- **知识问答** - 基于知识图谱 + 向量检索的辅助问答
 - **收藏夹同步** - B站扫码登录，自动同步收藏夹内容
 
 ### 技术栈
@@ -92,6 +103,8 @@ app.include_router(chat.router)
 app.include_router(tree.router)
 app.include_router(search.router)
 app.include_router(learning_path.router)
+app.include_router(game.router)
+app.include_router(srs.router)
 
 
 @app.get("/")
