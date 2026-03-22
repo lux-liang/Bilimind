@@ -21,10 +21,12 @@ from app.models import (
 from app.config import settings
 from app.routers.knowledge import get_rag_service, get_graph
 from app.services.query_router import QueryRouter
+from app.services.graph_rag import GraphRAGService
 
 router = APIRouter(prefix="/chat", tags=["对话"])
 
 _query_router: Optional[QueryRouter] = None
+_graph_rag: Optional[GraphRAGService] = None
 
 
 def _get_query_router() -> QueryRouter:
@@ -32,6 +34,13 @@ def _get_query_router() -> QueryRouter:
     if _query_router is None:
         _query_router = QueryRouter()
     return _query_router
+
+
+def _get_graph_rag() -> GraphRAGService:
+    global _graph_rag
+    if _graph_rag is None:
+        _graph_rag = GraphRAGService(get_graph())
+    return _graph_rag
 
 def _get_llm_client() -> OpenAI:
     """获取 LLM 客户端"""
@@ -56,13 +65,18 @@ def _build_overview_messages(context: str, question: str) -> list[dict]:
         {"role": "user", "content": question},
     ]
 
-def _build_rag_messages(context: str, question: str) -> list[dict]:
+def _build_rag_messages(context: str, question: str, community_context: str = "") -> list[dict]:
+    community_block = ""
+    if community_context:
+        community_block = f"\n\n知识图谱上下文（高层概览）：\n{community_context}\n"
     system = (
         "你是一个知识库助手，基于用户收藏的视频内容回答问题。\n"
         "请根据以下检索到的视频内容回答：\n"
         "1. 直接回答问题，引用相关内容\n"
         "2. 回答要自然、有条理\n"
-        "3. 可以引用视频标题作为来源\n\n"
+        "3. 可以引用视频标题作为来源\n"
+        "4. 如果提供了知识图谱上下文，请结合图谱中的概念关系给出更全面的回答\n\n"
+        f"{community_block}"
         f"相关内容：\n{context}"
     )
     return [
@@ -584,7 +598,26 @@ async def _prepare_messages(request: ChatRequest, db: AsyncSession) -> tuple[lis
             if bvid and bvid not in seen_bvids:
                 seen_bvids.add(bvid)
                 sources.append({"bvid": bvid, "title": title, "url": f"https://www.bilibili.com/video/{bvid}"})
-        return _build_rag_messages("\n\n---\n\n".join(context_parts), question), sources, question
+
+        # GraphRAG: 注入社区上下文
+        community_context = ""
+        try:
+            graph_rag = _get_graph_rag()
+            if graph_rag.is_built:
+                keywords = _extract_keywords(question)
+                graph = get_graph()
+                matched_node_ids = []
+                for kw in keywords:
+                    results = graph.search_nodes_by_name(kw, limit=3)
+                    matched_node_ids.extend([r["id"] for r in results])
+                if matched_node_ids:
+                    community_context = graph_rag.get_community_context(matched_node_ids)
+                    if community_context:
+                        logger.info(f"GraphRAG 注入社区上下文 ({len(matched_node_ids)} 匹配节点)")
+        except Exception as e:
+            logger.warning(f"GraphRAG 社区上下文获取失败: {e}")
+
+        return _build_rag_messages("\n\n---\n\n".join(context_parts), question, community_context), sources, question
 
     # 兜底
     context, sources = await _get_video_context(db, folder_ids, include_content=False, limit=50)
