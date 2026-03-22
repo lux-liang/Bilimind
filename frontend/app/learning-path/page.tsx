@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import NavSidebar from "@/components/NavSidebar";
 import UserTopbar from "@/components/UserTopbar";
+import KnowledgeGraph3D from "@/components/KnowledgeGraph3D";
 import Link from "next/link";
+import AIAssistant from "@/components/AIAssistant";
 import {
   learningPathApi,
   LearningPathResponse,
@@ -13,6 +15,14 @@ import {
 } from "@/lib/api";
 
 export default function LearningPathPage() {
+  return (
+    <Suspense>
+      <LearningPathContent />
+    </Suspense>
+  );
+}
+
+function LearningPathContent() {
   const searchParams = useSearchParams();
   const initialTarget = searchParams.get("target") || "";
 
@@ -22,6 +32,13 @@ export default function LearningPathPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [popularTopics, setPopularTopics] = useState<PopularTopic[]>([]);
+  const [focusedStepId, setFocusedStepId] = useState<number | null>(null);
+
+  // 从路径步骤中提取节点 ID 列表（用于 3D 图谱高亮）
+  const pathNodeIds = useMemo(() => {
+    if (!path) return [];
+    return path.steps.map((s) => s.node_id);
+  }, [path]);
 
   useEffect(() => {
     learningPathApi.getPopularTopics(12).then(setPopularTopics).catch(() => {});
@@ -129,7 +146,7 @@ export default function LearningPathPage() {
               </div>
             )}
 
-            {/* 路径结果 */}
+            {/* 路径结果：左右分栏 */}
             {path && (
               <div className="learning-path-result">
                 <div className="path-result-header">
@@ -145,31 +162,52 @@ export default function LearningPathPage() {
                   每一步都标注了推荐理由和关联视频，展开步骤可查看对应的视频片段。
                 </div>
 
-                <div className="path-steps">
-                  {path.steps.map((step, i) => (
-                    <PathStepCard key={step.node_id} step={step} isLast={i === path.steps.length - 1} />
-                  ))}
+                <div className="path-split-view">
+                  {/* 左侧：步骤卡片 */}
+                  <div className="path-steps-panel">
+                    <div className="path-steps">
+                      {path.steps.map((step, i) => (
+                        <PathStepCard
+                          key={step.node_id}
+                          step={step}
+                          isLast={i === path.steps.length - 1}
+                          isFocused={focusedStepId === step.node_id}
+                          onFocus={() => setFocusedStepId(step.node_id)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 右侧：3D 图谱（高亮路径） */}
+                  <div className="path-graph-panel">
+                    <KnowledgeGraph3D
+                      selectedNodeId={focusedStepId}
+                      onNodeSelect={(id) => setFocusedStepId(id)}
+                      highlightPath={pathNodeIds}
+                    />
+                  </div>
                 </div>
               </div>
             )}
           </div>
         </div>
       </main>
+      <AIAssistant />
     </div>
   );
 }
 
-function PathStepCard({ step, isLast }: { step: LearningPathStep; isLast: boolean }) {
+function PathStepCard({ step, isLast, isFocused, onFocus }: { step: LearningPathStep; isLast: boolean; isFocused?: boolean; onFocus?: () => void }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className={`path-step${step.is_optional ? " path-step-optional" : ""}`}>
+    <div className={`path-step${step.is_optional ? " path-step-optional" : ""}${isFocused ? " path-step-focused" : ""}`}>
       <div className="path-step-connector">
-        <div className="path-step-dot" />
+        <div className={`path-step-dot${isFocused ? " dot-focused" : ""}`} />
         {!isLast && <div className="path-step-line" />}
       </div>
-      <div className="path-step-content">
-        <div className="path-step-header" onClick={() => setExpanded(!expanded)}>
+      <div className="path-step-content" onClick={() => onFocus?.()}>
+        <div className="path-step-header" onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); onFocus?.(); }}>
           <span className="path-step-order">{step.order}</span>
           <span className={`node-type-badge badge-${step.node_type}`}>{step.node_type}</span>
           <Link href={`/node/${step.node_id}`} className="path-step-name" onClick={(e) => e.stopPropagation()}>
