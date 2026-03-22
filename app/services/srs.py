@@ -14,6 +14,33 @@ from app.models import SRSRecord, KnowledgeNode
 from app.services.graph_store import GraphStore
 
 
+def _sm2_algorithm(
+    item_interval: float, item_repetition: int, item_efactor: float, grade: int
+) -> tuple[float, int, float]:
+    """
+    SM-2 algorithm ported from supermemo npm package (github.com/VienDinhCom/supermemo)
+    """
+    if grade >= 3:
+        if item_repetition == 0:
+            next_interval = 1
+            next_repetition = 1
+        elif item_repetition == 1:
+            next_interval = 6
+            next_repetition = 2
+        else:
+            next_interval = round(item_interval * item_efactor)
+            next_repetition = item_repetition + 1
+    else:
+        next_interval = 1
+        next_repetition = 0
+
+    next_efactor = item_efactor + (0.1 - (5 - grade) * (0.08 + (5 - grade) * 0.02))
+    if next_efactor < 1.3:
+        next_efactor = 1.3
+
+    return next_interval, next_repetition, next_efactor
+
+
 async def record_review(
     db: AsyncSession,
     session_id: str,
@@ -49,25 +76,14 @@ async def record_review(
         )
         db.add(record)
 
-    # SM-2 algorithm
-    ef = record.easiness_factor
-    ef_new = ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
-    ef_new = max(1.3, ef_new)
+    # SM-2 algorithm ported from supermemo npm package (github.com/VienDinhCom/supermemo)
+    interval, repetitions, efactor = _sm2_algorithm(
+        record.interval_days, record.repetitions, record.easiness_factor, quality
+    )
 
-    if quality >= 3:
-        if record.repetitions == 0:
-            interval = 1.0
-        elif record.repetitions == 1:
-            interval = 6.0
-        else:
-            interval = record.interval_days * ef_new
-        record.repetitions += 1
-    else:
-        interval = 1.0
-        record.repetitions = 0
-
-    record.easiness_factor = ef_new
+    record.easiness_factor = efactor
     record.interval_days = interval
+    record.repetitions = repetitions
     record.next_review_date = datetime.utcnow() + timedelta(days=interval)
     record.last_review_date = datetime.utcnow()
     record.implicit_review = False

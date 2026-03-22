@@ -4,6 +4,7 @@ BiliMind 知识树学习导航系统
 知识预测游戏路由 - 猜关系玩法
 """
 import random
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -45,7 +46,7 @@ class AnswerRequest(BaseModel):
 
 
 @router.get("/challenge")
-async def get_challenge(session_id: str = Query(..., description="会话ID")):
+async def get_challenge(session_id: Optional[str] = Query(None, description="会话ID")):
     """随机生成一道知识关系预测题"""
     graph = get_graph()
     edges = list(graph.graph.edges(data=True))
@@ -119,21 +120,30 @@ async def submit_answer(
     score_record = result.scalar_one_or_none()
 
     if score_record is None:
-        score_record = GameScore(session_id=req.session_id)
+        score_record = GameScore(
+            session_id=req.session_id,
+            score=0, total_challenges=0, correct_count=0, streak=0, best_streak=0,
+        )
         db.add(score_record)
+        await db.flush()
 
-    score_record.total_challenges += 1
+    score_record.total_challenges = (score_record.total_challenges or 0) + 1
     if is_correct:
-        score_record.correct_count += 1
-        score_record.streak += 1
-        score_record.score += 10 + score_record.streak * 2  # 连续答对加分
-        if score_record.streak > score_record.best_streak:
+        score_record.correct_count = (score_record.correct_count or 0) + 1
+        score_record.streak = (score_record.streak or 0) + 1
+        score_record.score = (score_record.score or 0) + 10 + score_record.streak * 2
+        if score_record.streak > (score_record.best_streak or 0):
             score_record.best_streak = score_record.streak
     else:
         score_record.streak = 0
 
-    await db.commit()
-    await db.refresh(score_record)
+    try:
+        await db.commit()
+        await db.refresh(score_record)
+    except Exception as e:
+        logger.error(f"游戏分数保存失败: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"保存失败: {e}")
 
     return {
         "correct": is_correct,

@@ -151,14 +151,40 @@ export default function KnowledgeGraph3D({
       // 创建组
       const group = new THREE.Group();
 
-      // 内核亮点
-      const coreGeometry = new THREE.SphereGeometry(size * 0.3, 16, 16);
-      const coreMaterial = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(nodeColor),
+      // Fresnel glow shader (from GraphRAG Workbench)
+      const nodeMaterial = new THREE.ShaderMaterial({
         transparent: true,
-        opacity: isDimmed ? 0.15 : 1.0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        uniforms: {
+          colorCore: { value: new THREE.Color(nodeColor) },
+          colorRim: { value: new THREE.Color(nodeColor).multiplyScalar(0.6) },
+          opacity: { value: isDimmed ? 0.15 : 0.85 },
+        },
+        vertexShader: `
+          varying vec3 vN; varying vec3 vV;
+          void main(){
+            vN = normalize(normalMatrix * normal);
+            vec4 mv = modelViewMatrix * vec4(position,1.0);
+            vV = normalize(-mv.xyz);
+            gl_Position = projectionMatrix * mv;
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 colorCore, colorRim; uniform float opacity;
+          varying vec3 vN; varying vec3 vV;
+          void main(){
+            float fres = pow(1.0 - max(dot(vN, vV), 0.0), 2.0);
+            vec3 col = mix(colorCore, colorRim, fres);
+            float core = smoothstep(0.0, 0.6, fres);
+            gl_FragColor = vec4(col * (core * 1.5 + 0.3), opacity);
+          }
+        `,
       });
-      const core = new THREE.Mesh(coreGeometry, coreMaterial);
+
+      // Core sphere with fresnel glow
+      const coreGeometry = new THREE.SphereGeometry(size * 0.5, 24, 24);
+      const core = new THREE.Mesh(coreGeometry, nodeMaterial);
       group.add(core);
 
       // 外圈光晕 Sprite
@@ -166,12 +192,12 @@ export default function KnowledgeGraph3D({
       const glowMaterial = new THREE.SpriteMaterial({
         map: glowTexture,
         transparent: true,
-        opacity: isDimmed ? 0.05 : isSelected ? 0.9 : 0.5,
+        opacity: isDimmed ? 0.03 : isSelected ? 0.7 : 0.35,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       });
       const glow = new THREE.Sprite(glowMaterial);
-      glow.scale.set(size * 3, size * 3, 1);
+      glow.scale.set(size * 4, size * 4, 1);
       group.add(glow);
 
       // 如果选中，添加额外的脉冲光晕
