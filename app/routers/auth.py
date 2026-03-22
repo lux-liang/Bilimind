@@ -1,5 +1,5 @@
 """
-Bilibili RAG 知识库系统
+BiliMind 知识树导航系统
 
 认证路由 - 处理 B站登录
 """

@@ -1,5 +1,5 @@
 """
-Bilibili RAG 知识库系统
+BiliMind 知识树导航系统
 
 ASR 服务 - 使用 DashScope 录音文件识别
 """

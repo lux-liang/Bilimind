@@ -31,7 +31,7 @@ function TreeNodeItem({ node, searchTerm, difficultyFilter, onNodeSelect, select
   if (!visible) return null;
 
   // 弱关联节点在非搜索模式下默认折叠
-  const grade = (node as Record<string, unknown>).grade as string | undefined;
+  const grade = (node as unknown as Record<string, unknown>).grade as string | undefined;
   const isWeak = grade === "weak";
   const isCore = grade === "core";
   const isSelected = selectedNodeId === node.id;

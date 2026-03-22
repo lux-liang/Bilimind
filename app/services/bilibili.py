@@ -1,5 +1,5 @@
 """
-Bilibili RAG 知识库系统
+BiliMind 知识树导航系统
 
 B站 API 服务模块
 """
