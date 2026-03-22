@@ -4,6 +4,7 @@ BiliMind 知识树学习导航系统
 图存储服务 — networkx 内存图 + SQLite 持久化
 """
 import json
+import threading
 from typing import Optional
 from loguru import logger
 
@@ -31,6 +32,7 @@ class GraphStore:
     def __init__(self, graph_path: str = "./data/graph.json"):
         self.graph_path = graph_path
         self.graph: "nx.DiGraph" = nx.DiGraph() if nx else None
+        self._json_lock = threading.Lock()
 
     # ==================== 节点操作 ====================
 
@@ -224,39 +226,47 @@ class GraphStore:
     # ==================== 持久化 ====================
 
     def save_json(self) -> None:
-        """保存图为 JSON（快速加载缓存）"""
+        """保存图为 JSON（快速加载缓存），线程安全"""
         if self.graph is None:
             return
-        data = nx.node_link_data(self.graph)
-        with open(self.graph_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        with self._json_lock:
+            data = nx.node_link_data(self.graph)
+            with open(self.graph_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info(f"Graph saved: {self.graph.number_of_nodes()} nodes, {self.graph.number_of_edges()} edges")
 
     def load_json(self) -> bool:
-        """从 JSON 加载图"""
+        """从 JSON 加载图，线程安全"""
         if self.graph is None:
             return False
-        try:
-            with open(self.graph_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self.graph = nx.node_link_graph(data)
-            logger.info(f"Graph loaded: {self.graph.number_of_nodes()} nodes, {self.graph.number_of_edges()} edges")
-            return True
-        except FileNotFoundError:
-            logger.info("No graph cache found, starting fresh")
-            return False
-        except Exception as e:
-            logger.warning(f"Failed to load graph cache: {e}")
-            return False
+        with self._json_lock:
+            try:
+                with open(self.graph_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self.graph = nx.node_link_graph(data)
+                logger.info(f"Graph loaded: {self.graph.number_of_nodes()} nodes, {self.graph.number_of_edges()} edges")
+                return True
+            except FileNotFoundError:
+                logger.info("No graph cache found, starting fresh")
+                return False
+            except Exception as e:
+                logger.warning(f"Failed to load graph cache: {e}")
+                return False
 
-    async def load_from_db(self, db: AsyncSession) -> None:
-        """从 SQLite 加载完整图"""
+    async def load_from_db(self, db: AsyncSession, session_id: Optional[str] = None) -> None:
+        """从 SQLite 加载图（可按 session_id 过滤）"""
         if self.graph is None:
             return
 
         self.graph.clear()
 
-        nodes_result = await db.execute(select(KnowledgeNode))
+        node_query = select(KnowledgeNode)
+        edge_query = select(KnowledgeEdge)
+        if session_id:
+            node_query = node_query.where(KnowledgeNode.session_id == session_id)
+            edge_query = edge_query.where(KnowledgeEdge.session_id == session_id)
+
+        nodes_result = await db.execute(node_query)
         for node in nodes_result.scalars().all():
             self.graph.add_node(node.id, **{
                 "node_type": node.node_type,
@@ -308,6 +318,7 @@ class GraphStore:
             confidence=attrs.get("confidence", 0.5),
             source_count=attrs.get("source_count", 1),
             review_status=attrs.get("review_status", "auto"),
+            session_id=attrs.get("session_id"),
         )
         db.add(node)
         await db.flush()
@@ -337,6 +348,7 @@ class GraphStore:
             confidence=attrs.get("confidence", 0.5),
             evidence_segment_id=attrs.get("evidence_segment_id"),
             evidence_video_bvid=attrs.get("evidence_video_bvid"),
+            session_id=attrs.get("session_id"),
         )
         db.add(edge)
         await db.flush()
