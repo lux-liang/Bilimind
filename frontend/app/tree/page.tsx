@@ -3,6 +3,9 @@
 import { useEffect, useState, useCallback } from "react";
 import NavSidebar from "@/components/NavSidebar";
 import KnowledgeTree from "@/components/KnowledgeTree";
+import KnowledgeGraph3D from "@/components/KnowledgeGraph3D";
+import ImportUrlModal from "@/components/ImportUrlModal";
+import AIAssistant from "@/components/AIAssistant";
 import { treeApi, TreeStats, NodeDetail } from "@/lib/api";
 import UserTopbar from "@/components/UserTopbar";
 import Link from "next/link";
@@ -13,6 +16,10 @@ export default function TreePage() {
   const [nodeDetail, setNodeDetail] = useState<NodeDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [treeCollapsed, setTreeCollapsed] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [treeKey, setTreeKey] = useState(0);
+  const [viewMode, setViewMode] = useState<"tree" | "graph3d">("tree");
+  const [colorMode, setColorMode] = useState<"type" | "community">("type");
 
   useEffect(() => {
     treeApi.getStats().then(setStats).catch(() => {});
@@ -64,16 +71,59 @@ export default function TreePage() {
         <div className="app-with-nav">
           <NavSidebar />
           <div className="tree-workspace">
-            {/* 左：知识树面板 */}
-            <div className={`tree-panel-left ${treeCollapsed ? "collapsed" : ""}`}>
+            {/* 左：知识树/图谱面板 */}
+            <div className={`tree-panel-left ${treeCollapsed ? "collapsed" : ""} ${viewMode === "graph3d" ? "graph3d-mode" : ""}`}
+                 style={viewMode === "graph3d" && !treeCollapsed ? { flex: "1 1 0", maxWidth: "none", minWidth: 0 } : undefined}>
               <div className="tree-panel-header">
-                <h3>知识树导航</h3>
-                <button className="btn-icon-mini" onClick={() => setTreeCollapsed(!treeCollapsed)} title={treeCollapsed ? "展开" : "折叠"}>
-                  {treeCollapsed ? "→" : "←"}
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <h3>{viewMode === "tree" ? "知识树导航" : "3D 知识图谱"}</h3>
+                  <div className="view-toggle">
+                    <button
+                      className={`view-toggle-btn ${viewMode === "tree" ? "active" : ""}`}
+                      onClick={() => setViewMode("tree")}
+                    >
+                      列表
+                    </button>
+                    <button
+                      className={`view-toggle-btn ${viewMode === "graph3d" ? "active" : ""}`}
+                      onClick={() => setViewMode("graph3d")}
+                    >
+                      3D 图谱
+                    </button>
+                  </div>
+                  {viewMode === "graph3d" && (
+                    <button
+                      className="color-mode-toggle"
+                      onClick={() => setColorMode(colorMode === "type" ? "community" : "type")}
+                    >
+                      {colorMode === "type" ? "按类型" : "按社区"}
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                  <button
+                    className="btn-icon-mini"
+                    onClick={() => setImportModalOpen(true)}
+                    title="导入内容（URL）"
+                    style={{ fontSize: 14 }}
+                  >
+                    +
+                  </button>
+                  <button className="btn-icon-mini" onClick={() => setTreeCollapsed(!treeCollapsed)} title={treeCollapsed ? "展开" : "折叠"}>
+                    {treeCollapsed ? "→" : "←"}
+                  </button>
+                </div>
               </div>
-              {!treeCollapsed && (
-                <KnowledgeTree onNodeSelect={handleNodeSelect} selectedNodeId={selectedNodeId} />
+              {!treeCollapsed && viewMode === "tree" && (
+                <KnowledgeTree key={treeKey} onNodeSelect={handleNodeSelect} selectedNodeId={selectedNodeId} />
+              )}
+              {!treeCollapsed && viewMode === "graph3d" && (
+                <KnowledgeGraph3D
+                  key={treeKey}
+                  onNodeSelect={handleNodeSelect}
+                  selectedNodeId={selectedNodeId}
+                  colorMode={colorMode}
+                />
               )}
             </div>
 
@@ -277,6 +327,15 @@ export default function TreePage() {
           </div>
         </div>
       </main>
+      <ImportUrlModal
+        open={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        onSuccess={() => {
+          setTreeKey((k) => k + 1);
+          treeApi.getStats().then(setStats).catch(() => {});
+        }}
+      />
+      <AIAssistant />
     </div>
   );
 }
