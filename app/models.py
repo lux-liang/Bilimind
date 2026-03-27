@@ -131,6 +131,8 @@ class Segment(Base):
     confidence = Column(Float, default=1.0)
     extraction_status = Column(String(20), default='pending')  # pending/done/failed
     session_id = Column(String(64), index=True, nullable=True)  # 用户隔离
+    knowledge_density = Column(Float, nullable=True)  # 知识密度分数
+    is_peak = Column(Boolean, default=False)  # 是否为知识峰值片段
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -215,6 +217,82 @@ class SRSRecord(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+# ==================== 知映 ZhiYing 知识编译模型 ====================
+
+class Concept(Base):
+    """概念表 — 知识编译的一级单元"""
+    __tablename__ = 'concepts'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(64), index=True, nullable=True)
+    name = Column(String(200), nullable=False)
+    normalized_name = Column(String(200), index=True)
+    definition = Column(Text, nullable=True)
+    difficulty = Column(Integer, default=1)  # 1-5
+    source_count = Column(Integer, default=1)  # 被多少个片段提到
+    video_count = Column(Integer, default=1)  # 出现在多少个视频中
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Claim(Base):
+    """论断表 — 概念下的具体知识声明，锚定到视频时间戳"""
+    __tablename__ = 'claims'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(64), index=True, nullable=True)
+    concept_id = Column(Integer, index=True, nullable=False)  # FK → Concept
+    statement = Column(Text, nullable=False)  # 论断文本
+    claim_type = Column(String(30), default='explanation')  # definition/explanation/example/comparison/warning
+    confidence = Column(Float, default=0.5)
+    segment_id = Column(Integer, index=True, nullable=True)  # FK → Segment
+    video_bvid = Column(String(20), index=True, nullable=True)
+    start_time = Column(Float, nullable=True)  # 秒
+    end_time = Column(Float, nullable=True)
+    raw_text = Column(Text, nullable=True)  # 原始字幕片段
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ConceptRelation(Base):
+    """概念关系表 — 前置/相关/包含"""
+    __tablename__ = 'concept_relations'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(64), index=True, nullable=True)
+    source_concept_id = Column(Integer, index=True, nullable=False)
+    target_concept_id = Column(Integer, index=True, nullable=False)
+    relation_type = Column(String(30), nullable=False)  # prerequisite_of / related_to / part_of
+    confidence = Column(Float, default=0.5)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CrossVideoAlignment(Base):
+    """跨视频对齐表 — 同一概念在不同视频中的讲法对比"""
+    __tablename__ = 'cross_video_alignments'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(64), index=True, nullable=True)
+    concept_id = Column(Integer, index=True, nullable=False)
+    claim_a_id = Column(Integer, nullable=False)
+    claim_b_id = Column(Integer, nullable=False)
+    alignment_type = Column(String(30), nullable=False)  # consistent / complementary / perspective_diff
+    explanation = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class UserMastery(Base):
+    """用户知识掌握度"""
+    __tablename__ = 'user_mastery'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(64), index=True, nullable=False)
+    concept_id = Column(Integer, index=True, nullable=False)
+    mastery_level = Column(Integer, default=0)  # 0=未学 1=了解 2=理解 3=掌握 4=精通 5=专家
+    last_reviewed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # ==================== Pydantic 模型 (API 用) ====================
 
 class ContentSource(str, Enum):
@@ -281,6 +359,7 @@ class VideoContent(BaseModel):
     source: ContentSource
     source_type: SourceType = SourceType.BILIBILI
     outline: Optional[list] = None
+    session_id: Optional[str] = None
 
 
 class QRCodeResponse(BaseModel):

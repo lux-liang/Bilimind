@@ -26,6 +26,9 @@ from app.routers import search
 from app.routers import learning_path
 from app.routers import game
 from app.routers import srs
+from app.routers import compile
+from app.routers import evidence
+from app.routers import organizer
 
 
 # 配置日志
@@ -105,6 +108,9 @@ app.include_router(search.router)
 app.include_router(learning_path.router)
 app.include_router(game.router)
 app.include_router(srs.router)
+app.include_router(compile.router)
+app.include_router(evidence.router)
+app.include_router(organizer.router)
 
 
 @app.get("/")
