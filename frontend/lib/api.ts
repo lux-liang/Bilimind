@@ -2,6 +2,8 @@
  * API 客户端
  */
 
+import { clearAuthSession, readAuthSession } from "./session";
+
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (
   typeof window !== "undefined" && window.location.hostname !== "localhost"
     ? "/api/proxy"  // 外网访问时走 Next.js 代理
@@ -10,8 +12,7 @@ export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (
 
 // 获取 localStorage 中的 session_id
 export function getSessionId(): string | null {
-    if (typeof window === 'undefined') return null;
-    return localStorage.getItem('bili_session');
+    return readAuthSession().sessionId;
 }
 
 // 通用请求函数
@@ -32,8 +33,7 @@ async function request<T>(
     // 会话失效时自动清除登录状态并刷新页面
     if (response.status === 401) {
         if (typeof window !== "undefined") {
-            localStorage.removeItem("bili_session");
-            localStorage.removeItem("bili_user");
+            clearAuthSession();
             window.location.href = "/";
         }
         throw new Error("会话已过期，请重新登录");
@@ -279,9 +279,9 @@ export const knowledgeApi = {
         ),
 
     // 获取构建状态
-    getBuildStatus: (taskId: string) => {
+    getBuildStatus: (taskId: string, sessionId?: string) => {
         const params = new URLSearchParams();
-        const sid = getSessionId();
+        const sid = sessionId || getSessionId();
         if (sid) params.set("session_id", sid);
         return request<BuildStatus>(`/knowledge/build/status/${taskId}?${params.toString()}`);
     },
@@ -433,8 +433,17 @@ export interface NodeDetail {
         owner_name?: string;
         pic_url?: string;
         duration?: number;
+        evidence_score?: number;
         url: string;
-        segments: Array<{ start_time?: number; end_time?: number; text: string; time_label: string }>;
+        segments: Array<{
+            start_time?: number;
+            end_time?: number;
+            text: string;
+            time_label: string;
+            match_confidence?: number;
+            confidence_level?: "high" | "medium" | "low";
+            match_reason?: string;
+        }>;
     }>;
     tree_position: Array<{ id: number; name: string; type: string }>;
 }
@@ -483,9 +492,9 @@ export interface TreeStats {
 // ==================== 知识树 API ====================
 
 export const treeApi = {
-    getTree: (opts?: { minConfidence?: number; topicId?: number; stage?: string }) => {
+    getTree: (opts?: { minConfidence?: number; topicId?: number; stage?: string; sessionId?: string | null }) => {
         const params = new URLSearchParams();
-        const sid = getSessionId();
+        const sid = opts?.sessionId ?? getSessionId();
         if (sid) params.set("session_id", sid);
         if (opts?.minConfidence) params.set("min_confidence", String(opts.minConfidence));
         if (opts?.topicId) params.set("topic_id", String(opts.topicId));
@@ -493,46 +502,46 @@ export const treeApi = {
         return request<TreeResponse>(`/tree?${params.toString()}`);
     },
 
-    getGraph: (opts?: { topicId?: number; minConfidence?: number }) => {
+    getGraph: (opts?: { topicId?: number; minConfidence?: number; sessionId?: string | null }) => {
         const params = new URLSearchParams();
-        const sid = getSessionId();
+        const sid = opts?.sessionId ?? getSessionId();
         if (sid) params.set("session_id", sid);
         if (opts?.topicId) params.set("topic_id", String(opts.topicId));
         if (opts?.minConfidence) params.set("min_confidence", String(opts.minConfidence));
         return request<GraphData>(`/tree/graph?${params.toString()}`);
     },
 
-    getTopics: () => {
+    getTopics: (sessionId?: string | null) => {
         const params = new URLSearchParams();
-        const sid = getSessionId();
+        const sid = sessionId ?? getSessionId();
         if (sid) params.set("session_id", sid);
         return request<Array<{ id: number; name: string; definition?: string; difficulty: number; source_count: number; confidence: number }>>(`/tree/topics?${params.toString()}`);
     },
 
-    getNodeDetail: (nodeId: number) => {
+    getNodeDetail: (nodeId: number, sessionId?: string | null) => {
         const params = new URLSearchParams();
-        const sid = getSessionId();
+        const sid = sessionId ?? getSessionId();
         if (sid) params.set("session_id", sid);
         return request<NodeDetail>(`/tree/node/${nodeId}?${params.toString()}`);
     },
 
-    getVideoDetail: (bvid: string) => {
+    getVideoDetail: (bvid: string, sessionId?: string | null) => {
         const params = new URLSearchParams();
-        const sid = getSessionId();
+        const sid = sessionId ?? getSessionId();
         if (sid) params.set("session_id", sid);
         return request<VideoDetail>(`/tree/video/${bvid}?${params.toString()}`);
     },
 
-    getNodeSegments: (nodeId: number) => {
+    getNodeSegments: (nodeId: number, sessionId?: string | null) => {
         const params = new URLSearchParams();
-        const sid = getSessionId();
+        const sid = sessionId ?? getSessionId();
         if (sid) params.set("session_id", sid);
         return request<Array<SegmentRef & { video_bvid: string; url?: string }>>(`/tree/node/${nodeId}/segments?${params.toString()}`);
     },
 
-    getStats: () => {
+    getStats: (sessionId?: string | null) => {
         const params = new URLSearchParams();
-        const sid = getSessionId();
+        const sid = sessionId ?? getSessionId();
         if (sid) params.set("session_id", sid);
         return request<TreeStats>(`/tree/stats?${params.toString()}`);
     },
@@ -575,7 +584,16 @@ export interface LearningPathStep {
     reason: string;
     is_optional: boolean;
     has_videos: boolean;
+    priority_score: number;
+    support_score: number;
+    dependency_depth: number;
+    dependency_role: string;
+    reason_tags: string[];
     video_count: number;
+    segment_count: number;
+    evidence_score: number;
+    composite_score: number;
+    support_label: "strong" | "medium" | "weak";
     videos: Array<{
         bvid: string;
         title: string;
@@ -590,6 +608,17 @@ export interface LearningPathResponse {
     steps: LearningPathStep[];
     total_steps: number;
     estimated_videos: number;
+    summary?: {
+        mode_label: string;
+        avg_priority_score: number;
+        avg_support_score: number;
+        avg_evidence_score?: number;
+        avg_composite_score?: number;
+        foundation_steps: number;
+        direct_prerequisites: number;
+        optional_steps: number;
+        strong_support_steps?: number;
+    };
 }
 
 // ==================== 搜索 API ====================
@@ -627,15 +656,203 @@ export interface SearchResults {
 }
 
 export const searchApi = {
-    search: (q: string, type: string = "all", limit: number = 20) => {
+    search: (q: string, type: string = "all", limit: number = 20, sessionId?: string | null) => {
         const params = new URLSearchParams();
-        const sid = getSessionId();
+        const sid = sessionId ?? getSessionId();
         if (sid) params.set("session_id", sid);
         params.set("q", q);
         params.set("type", type);
         params.set("limit", String(limit));
         return request<SearchResults>(`/search?${params.toString()}`);
     },
+};
+
+// ==================== 知映编译类型 ====================
+
+export interface CompileConcept {
+  id: number;
+  name: string;
+  definition: string;
+  difficulty: number;
+  claims: CompileClaim[];
+}
+
+export interface CompileClaim {
+  id: number;
+  statement: string;
+  type: string;
+  confidence: number;
+  time: string;
+  start_time: number;
+  end_time: number;
+  raw_text: string;
+}
+
+export interface TimelineSegment {
+  start: number;
+  end: number;
+  density: number;
+  is_peak: boolean;
+  concepts?: string[];
+}
+
+export interface CompileResult {
+  video: { bvid: string; title: string; duration: number };
+  concepts: CompileConcept[];
+  timeline: TimelineSegment[];
+  prerequisites: Array<{ source: string; target: string; type: string }>;
+  stats: { concept_count: number; claim_count: number; peak_count: number };
+}
+
+export interface EvidenceItem {
+  ref: number;
+  video_title: string;
+  bvid: string;
+  time: string;
+  start_time: number;
+  end_time?: number;
+  text: string;
+  concept?: string;
+  claim?: string;
+}
+
+export interface EvidenceAnswer {
+  answer: string;
+  evidence: EvidenceItem[];
+  concept_count: number;
+}
+
+export interface OrganizerVideoItem {
+  bvid: string;
+  title: string;
+  owner_name?: string;
+  duration?: number;
+  pic_url?: string;
+  folder_ids: number[];
+  folder_titles: string[];
+  subject_tags: string[];
+  content_type: string;
+  difficulty_level: string;
+  learning_status: string;
+  value_tier: string;
+  organize_score: number;
+  segment_count: number;
+  claim_count: number;
+  concept_count: number;
+  knowledge_node_count: number;
+  confidence: number;
+  is_core: boolean;
+  reasons: string[];
+  series_key?: string | null;
+  series_name?: string | null;
+  duplicate_candidates: Array<{
+    group_id: string;
+    similarity: number;
+    recommended_keep: boolean;
+  }>;
+}
+
+export interface OrganizerSeriesGroup {
+  series_key: string;
+  series_name: string;
+  video_count: number;
+  coverage_score: number;
+  reasons: string[];
+  videos: Array<{
+    bvid: string;
+    title: string;
+    organize_score: number;
+    difficulty_level: string;
+  }>;
+}
+
+export interface OrganizerDuplicateGroup {
+  group_id: string;
+  reason: string;
+  recommended_keep_bvid: string;
+  archive_candidates: string[];
+  items: Array<{
+    bvid: string;
+    title: string;
+    similarity: number;
+    organize_score: number;
+  }>;
+}
+
+export interface OrganizerSuggestion {
+  type: string;
+  title: string;
+  description: string;
+  targets: string[];
+  confidence: number;
+  evidence: string[];
+}
+
+export interface OrganizerReport {
+  summary: {
+    total_videos: number;
+    series_count: number;
+    duplicate_group_count: number;
+    core_count: number;
+    low_value_count: number;
+    compiled_count: number;
+  };
+  videos: OrganizerVideoItem[];
+  series_groups: OrganizerSeriesGroup[];
+  duplicate_groups: OrganizerDuplicateGroup[];
+  suggestions: OrganizerSuggestion[];
+  facet_counts: {
+    subject_tags: Record<string, number>;
+    content_type: Record<string, number>;
+    difficulty_level: Record<string, number>;
+    learning_status: Record<string, number>;
+    value_tier: Record<string, number>;
+  };
+  export_generated_at: string;
+}
+
+// ==================== 知映编译 API ====================
+
+export const compileApi = {
+  compileVideo: (bvid: string, sessionId: string) =>
+    request<{ task_id: string; message: string }>("/compile/video", {
+      method: "POST",
+      body: JSON.stringify({ bvid, session_id: sessionId }),
+    }),
+  getStatus: (taskId: string, sessionId?: string) => {
+    const params = new URLSearchParams();
+    const sid = sessionId || getSessionId();
+    if (sid) params.set("session_id", sid);
+    return request<{ status: string; progress: number; message: string }>(`/compile/status/${taskId}?${params.toString()}`);
+  },
+  getResult: (bvid: string) => {
+    const params = new URLSearchParams();
+    const sid = getSessionId();
+    if (sid) params.set("session_id", sid);
+    return request<CompileResult>(`/compile/result/${bvid}?${params.toString()}`);
+  },
+};
+
+export const evidenceApi = {
+  ask: (question: string, sessionId?: string | null) =>
+    request<EvidenceAnswer>("/evidence/ask", {
+      method: "POST",
+      body: JSON.stringify({ question, session_id: sessionId }),
+    }),
+};
+
+export const organizerApi = {
+  getReport: (sessionId: string, folderIds?: number[]) => {
+    const params = new URLSearchParams({ session_id: sessionId });
+    if (folderIds && folderIds.length > 0) {
+      params.set("folder_ids", folderIds.join(","));
+    }
+    return request<OrganizerReport>(`/organizer/report?${params.toString()}`);
+  },
+  getExportUrl: (sessionId: string, format: "json" | "markdown" = "json") => {
+    const params = new URLSearchParams({ session_id: sessionId, format });
+    return `${API_BASE_URL}/organizer/export?${params.toString()}`;
+  },
 };
 
 // ==================== 学习路径独立 API ====================
