@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     tree_min_confidence: float = Field(default=0.4, env="TREE_MIN_CONFIDENCE")
     extraction_segment_merge_seconds: float = Field(default=30.0, env="EXTRACTION_SEGMENT_MERGE_SECONDS")
 
+    # 轻量模型
+    ml_artifact_dir: str = Field(default="./data/models", env="MODEL_ARTIFACT_DIR")
+    evidence_ranker_model_path: str = Field(default="./data/models/evidence_ranker.json", env="EVIDENCE_RANKER_MODEL_PATH")
+    organizer_classifier_model_path: str = Field(default="./data/models/organizer_classifier.json", env="ORGANIZER_CLASSIFIER_MODEL_PATH")
+    evidence_ranker_enabled: bool = Field(default=True, env="EVIDENCE_RANKER_ENABLED")
+    organizer_classifier_enabled: bool = Field(default=True, env="ORGANIZER_CLASSIFIER_ENABLED")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -74,6 +81,7 @@ def ensure_directories():
     dirs = [
         "data",
         settings.chroma_persist_directory,
+        settings.ml_artifact_dir,
         "logs"
     ]
     for d in dirs:
