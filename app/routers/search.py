@@ -3,24 +3,19 @@ BiliMind 知识树学习导航系统
 
 统一搜索路由 — 关键词 + 语义 + 图谱三路混合
 """
-from typing import Optional, List
-from fastapi import APIRouter, HTTPException, Query, Depends
+from typing import Optional
+from fastapi import APIRouter, Query, Depends
 from loguru import logger
 from sqlalchemy import select, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import (
-    KnowledgeNode, Segment, VideoCache, NodeSegmentLink, _fmt_time,
-)
+from app.models import KnowledgeNode, Segment, VideoCache, NodeSegmentLink
 from app.services.rag import RAGService
-from app.services.graph_store import GraphStore
-from app.config import settings
 
 router = APIRouter(prefix="/search", tags=["搜索"])
 
 _rag_service: Optional[RAGService] = None
-_graph_store: Optional[GraphStore] = None
 
 
 def _get_rag() -> RAGService:
@@ -28,21 +23,12 @@ def _get_rag() -> RAGService:
     if _rag_service is None:
         _rag_service = RAGService()
     return _rag_service
-
-
-def _get_graph() -> GraphStore:
-    global _graph_store
-    if _graph_store is None:
-        _graph_store = GraphStore(graph_path=settings.graph_persist_path)
-        _graph_store.load_json()
-    return _graph_store
-
-
 @router.get("")
 async def unified_search(
     q: str = Query(..., min_length=1, description="搜索关键词"),
     type: str = Query("all", description="all / nodes / videos / segments"),
     limit: int = Query(20, le=50),
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -62,13 +48,13 @@ async def unified_search(
     }
 
     if type in ("all", "nodes"):
-        results["nodes"] = await _search_nodes(q, limit, db)
+        results["nodes"] = await _search_nodes(q, limit, db, session_id=session_id)
 
     if type in ("all", "videos"):
-        results["videos"] = await _search_videos(q, limit, db)
+        results["videos"] = await _search_videos(q, limit, db, session_id=session_id)
 
     if type in ("all", "segments"):
-        results["segments"] = await _search_segments(q, min(limit, 10), db)
+        results["segments"] = await _search_segments(q, min(limit, 10), db, session_id=session_id)
 
     return results
 
@@ -77,39 +63,42 @@ async def unified_search(
 async def search_nodes(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, le=50),
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
     db: AsyncSession = Depends(get_db),
 ):
     """搜索知识节点"""
-    return await _search_nodes(q, limit, db)
+    return await _search_nodes(q, limit, db, session_id=session_id)
 
 
 @router.get("/videos")
 async def search_videos(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, le=50),
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
     db: AsyncSession = Depends(get_db),
 ):
     """搜索视频"""
-    return await _search_videos(q, limit, db)
+    return await _search_videos(q, limit, db, session_id=session_id)
 
 
 @router.get("/segments")
 async def search_segments(
     q: str = Query(..., min_length=1),
     limit: int = Query(10, le=20),
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
     db: AsyncSession = Depends(get_db),
 ):
     """搜索片段（语义检索）"""
-    return await _search_segments(q, limit, db)
+    return await _search_segments(q, limit, db, session_id=session_id)
 
 
 # ==================== 搜索实现 ====================
 
-async def _search_nodes(q: str, limit: int, db: AsyncSession) -> list[dict]:
+async def _search_nodes(q: str, limit: int, db: AsyncSession, session_id: Optional[str] = None) -> list[dict]:
     """关键词搜索知识节点 + 图谱名称匹配"""
     # SQLite LIKE 搜索
     pattern = f"%{q}%"
-    result = await db.execute(
+    query = (
         select(KnowledgeNode)
         .where(
             KnowledgeNode.review_status != "rejected",
@@ -122,14 +111,19 @@ async def _search_nodes(q: str, limit: int, db: AsyncSession) -> list[dict]:
         .order_by(KnowledgeNode.source_count.desc())
         .limit(limit)
     )
+    if session_id:
+        query = query.where(KnowledgeNode.session_id == session_id)
+    result = await db.execute(query)
     nodes = result.scalars().all()
 
     items = []
     for n in nodes:
-        vid_count = await db.scalar(
-            select(func.count(func.distinct(NodeSegmentLink.video_bvid)))
-            .where(NodeSegmentLink.node_id == n.id)
+        count_query = select(func.count(func.distinct(NodeSegmentLink.video_bvid))).where(
+            NodeSegmentLink.node_id == n.id
         )
+        if session_id:
+            count_query = count_query.where(NodeSegmentLink.session_id == session_id)
+        vid_count = await db.scalar(count_query)
         items.append({
             "id": n.id,
             "name": n.name,
@@ -144,10 +138,10 @@ async def _search_nodes(q: str, limit: int, db: AsyncSession) -> list[dict]:
     return items
 
 
-async def _search_videos(q: str, limit: int, db: AsyncSession) -> list[dict]:
+async def _search_videos(q: str, limit: int, db: AsyncSession, session_id: Optional[str] = None) -> list[dict]:
     """关键词搜索视频"""
     pattern = f"%{q}%"
-    result = await db.execute(
+    query = (
         select(VideoCache)
         .where(
             or_(
@@ -156,16 +150,25 @@ async def _search_videos(q: str, limit: int, db: AsyncSession) -> list[dict]:
                 VideoCache.owner_name.ilike(pattern),
             )
         )
-        .limit(limit)
     )
+    if session_id:
+        query = query.where(
+            VideoCache.bvid.in_(
+                select(Segment.video_bvid).where(Segment.session_id == session_id)
+            )
+        )
+    query = query.limit(limit)
+    result = await db.execute(query)
     videos = result.scalars().all()
 
     items = []
     for v in videos:
-        kn_count = await db.scalar(
-            select(func.count(func.distinct(NodeSegmentLink.node_id)))
-            .where(NodeSegmentLink.video_bvid == v.bvid)
+        count_query = select(func.count(func.distinct(NodeSegmentLink.node_id))).where(
+            NodeSegmentLink.video_bvid == v.bvid
         )
+        if session_id:
+            count_query = count_query.where(NodeSegmentLink.session_id == session_id)
+        kn_count = await db.scalar(count_query)
         items.append({
             "bvid": v.bvid,
             "title": v.title,
@@ -180,11 +183,11 @@ async def _search_videos(q: str, limit: int, db: AsyncSession) -> list[dict]:
     return items
 
 
-async def _search_segments(q: str, limit: int, db: AsyncSession) -> list[dict]:
+async def _search_segments(q: str, limit: int, db: AsyncSession, session_id: Optional[str] = None) -> list[dict]:
     """语义搜索片段（通过 ChromaDB 向量检索）"""
     try:
         rag = _get_rag()
-        docs = rag.search(q, k=limit)
+        docs = rag.search(q, k=limit, session_id=session_id)
     except Exception as e:
         logger.warning(f"Semantic search failed: {e}")
         docs = []

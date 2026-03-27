@@ -281,7 +281,7 @@ class GraphStore:
                 "review_status": node.review_status,
             })
 
-        edges_result = await db.execute(select(KnowledgeEdge))
+        edges_result = await db.execute(edge_query)
         for edge in edges_result.scalars().all():
             self.graph.add_edge(edge.source_node_id, edge.target_node_id, **{
                 "relation_type": edge.relation_type,

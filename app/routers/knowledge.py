@@ -32,8 +32,6 @@ router = APIRouter(prefix="/knowledge", tags=["知识库"])
 # 全局服务实例
 _rag_service: Optional[RAGService] = None
 _extractor: Optional[KnowledgeExtractor] = None
-_graph_store: Optional[GraphStore] = None
-
 # 构建任务状态
 build_tasks = {}
 
@@ -51,23 +49,29 @@ def get_extractor() -> KnowledgeExtractor:
     if _extractor is None:
         _extractor = KnowledgeExtractor()
     return _extractor
+async def _load_graph_for_session(db: AsyncSession, session_id: Optional[str]) -> GraphStore:
+    """为当前用户加载隔离后的图谱快照。"""
+    graph = GraphStore(graph_path=settings.graph_persist_path)
+    await graph.load_from_db(db, session_id=session_id)
+    return graph
 
 
 def get_graph() -> GraphStore:
-    global _graph_store
-    if _graph_store is None:
-        _graph_store = GraphStore(graph_path=settings.graph_persist_path)
-        _graph_store.load_json()
-    return _graph_store
+    """兼容旧代码：返回一个新的图实例，不复用跨请求单例。"""
+    graph = GraphStore(graph_path=settings.graph_persist_path)
+    graph.load_json()
+    return graph
 
 
 _graph_rag_service: Optional[GraphRAGService] = None
 
 
-def get_graph_rag_service() -> GraphRAGService:
+def get_graph_rag_service(graph_store: Optional[GraphStore] = None) -> GraphRAGService:
     global _graph_rag_service
+    if graph_store is not None:
+        return GraphRAGService(graph_store)
     if _graph_rag_service is None:
-        _graph_rag_service = GraphRAGService(get_graph())
+        _graph_rag_service = GraphRAGService(GraphStore(graph_path=settings.graph_persist_path))
     return _graph_rag_service
 
 
@@ -398,10 +402,10 @@ async def _sync_folder(
                             cache.is_processed = True
                             logger.info(f"[{bvid}] 已写入缓存: source={cache.content_source}")
                 try:
-                    rag.delete_video(bvid)
+                    rag.delete_video(bvid, session_id=session_id)
                 except Exception as e:
                     logger.warning(f"删除旧向量失败 [{bvid}]: {e}")
-                chunks = rag.add_video_content(content)
+                chunks = rag.add_video_content(content, session_id=session_id)
                 logger.info(f"[{bvid}] 向量化完成，块数={chunks}")
             else:
                 logger.info(f"[{bvid}] 内容未变化或无需升级，跳过向量化")
@@ -445,7 +449,7 @@ async def _sync_folder(
             )
             if other_count == 0:
                 try:
-                    rag.delete_video(bvid)
+                    rag.delete_video(bvid, session_id=session_id)
                 except Exception as e:
                     logger.warning(f"删除向量失败 [{bvid}]: {e}")
 
@@ -478,11 +482,13 @@ async def _sync_folder(
 
 
 @router.get("/stats")
-async def get_knowledge_stats():
+async def get_knowledge_stats(
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
+):
     """获取知识库统计信息"""
     try:
         rag = get_rag_service()
-        stats = rag.get_collection_stats()
+        stats = rag.get_collection_stats(session_id=session_id)
         return stats
     except Exception as e:
         logger.error(f"获取统计信息失败: {e}")
@@ -494,28 +500,11 @@ async def get_folder_status(
     session_id: str = Query(..., description="会话ID"),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取收藏夹入库状态（跨 Session 查找同一用户的数据）"""
-    
-    # 1. 先查当前 Session 对应的用户 MID
-    result = await db.execute(
-        select(UserSession.bili_mid).where(UserSession.session_id == session_id)
-    )
-    mid = result.scalar()
-    
-    target_session_ids = [session_id]
-    
-    if mid:
-        # 2. 如果有 MID，查找该用户所有的 Session ID
-        result = await db.execute(
-            select(UserSession.session_id).where(UserSession.bili_mid == mid)
-        )
-        target_session_ids = [row[0] for row in result.fetchall()]
-    
-    # 3. 查询所有关联 Session 的收藏夹状态
-    # 使用 group_by media_id 来去重，取最新的那个
+    """获取当前 session 的收藏夹入库状态。"""
+
     rows = await db.execute(
         select(FavoriteFolder.id, FavoriteFolder.media_id, FavoriteFolder.last_sync_at)
-        .where(FavoriteFolder.session_id.in_(target_session_ids))
+        .where(FavoriteFolder.session_id == session_id)
         .order_by(FavoriteFolder.updated_at.desc())
     )
     
@@ -641,6 +630,8 @@ async def build_knowledge_base(
         "total_videos": 0,
         "processed_videos": 0,
         "message": "",
+        "session_id": session_id,
+        "dataset_version": str(uuid.uuid4()),
     }
 
     background_tasks.add_task(
@@ -737,12 +728,17 @@ async def _build_knowledge_base_task(
 
 
 @router.get("/build/status/{task_id}", response_model=BuildStatus)
-async def get_build_status(task_id: str):
+async def get_build_status(
+    task_id: str,
+    session_id: str = Query(..., description="会话ID"),
+):
     """获取构建任务状态"""
     if task_id not in build_tasks:
         raise HTTPException(status_code=404, detail="任务不存在")
 
     task = build_tasks[task_id]
+    if task.get("session_id") != session_id:
+        raise HTTPException(status_code=404, detail="任务不存在")
     return BuildStatus(
         task_id=task_id,
         status=task["status"],
@@ -755,11 +751,13 @@ async def get_build_status(task_id: str):
 
 
 @router.delete("/clear")
-async def clear_knowledge_base():
+async def clear_knowledge_base(
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
+):
     """清空知识库"""
     try:
         rag = get_rag_service()
-        rag.clear_collection()
+        rag.clear_collection(session_id=session_id)
         return {"message": "知识库已清空"}
     except Exception as e:
         logger.error(f"清空知识库失败: {e}")
@@ -767,11 +765,14 @@ async def clear_knowledge_base():
 
 
 @router.delete("/video/{bvid}")
-async def delete_video_from_knowledge(bvid: str):
+async def delete_video_from_knowledge(
+    bvid: str,
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
+):
     """从知识库中删除指定视频"""
     try:
         rag = get_rag_service()
-        rag.delete_video(bvid)
+        rag.delete_video(bvid, session_id=session_id)
         return {"message": f"已删除视频 {bvid}"}
     except Exception as e:
         logger.error(f"删除视频失败: {e}")
@@ -795,15 +796,19 @@ async def _extract_knowledge_for_video(
     3. 写入图存储 + SQLite
     """
     # 检查是否已抽取
-    existing_segs = await db.scalar(
-        select(func.count()).select_from(Segment).where(Segment.video_bvid == bvid)
-    )
+    existing_query = select(func.count()).select_from(Segment).where(Segment.video_bvid == bvid)
+    if session_id:
+        existing_query = existing_query.where(Segment.session_id == session_id)
+    existing_segs = await db.scalar(existing_query)
     if existing_segs and existing_segs > 0:
         # 检查是否已完成抽取
-        done_count = await db.scalar(
+        done_query = (
             select(func.count()).select_from(Segment)
             .where(Segment.video_bvid == bvid, Segment.extraction_status == "done")
         )
+        if session_id:
+            done_query = done_query.where(Segment.session_id == session_id)
+        done_count = await db.scalar(done_query)
         if done_count and done_count > 0:
             logger.info(f"[{bvid}] 已完成知识抽取，跳过")
             return
@@ -861,7 +866,7 @@ async def _extract_knowledge_for_video(
         return
 
     # Step 3: 写入图存储
-    graph = get_graph()
+    graph = await _load_graph_for_session(db, session_id)
     name_to_node_id: dict[str, int] = {}
 
     for entity in entities:
@@ -883,9 +888,10 @@ async def _extract_knowledge_for_video(
                 if new_difficulty > node_data.get("difficulty", 1):
                     graph.graph.nodes[existing_id]["difficulty"] = new_difficulty
                 # 同步到 DB
-                db_result = await db.execute(
-                    select(KnowledgeNode).where(KnowledgeNode.id == existing_id)
-                )
+                db_query = select(KnowledgeNode).where(KnowledgeNode.id == existing_id)
+                if session_id:
+                    db_query = db_query.where(KnowledgeNode.session_id == session_id)
+                db_result = await db.execute(db_query)
                 db_node = db_result.scalar_one_or_none()
                 if db_node:
                     db_node.source_count = new_count
@@ -963,9 +969,6 @@ async def _extract_knowledge_for_video(
         cache.knowledge_node_count = len(entities)
 
     await db.commit()
-
-    # 保存图缓存
-    graph.save_json()
 
     logger.info(f"[{bvid}] 知识抽取完成: {len(entities)} 实体, {len(relations)} 关系")
 
@@ -1086,11 +1089,11 @@ async def import_url(
     # 写入 RAG 向量库
     rag = get_rag_service()
     try:
-        rag.delete_video(source_id)
+        rag.delete_video(source_id, session_id=request.session_id)
     except Exception:
         pass
     try:
-        chunks = rag.add_video_content(content)
+        chunks = rag.add_video_content(content, session_id=request.session_id)
         logger.info(f"[{source_id}] 向量化完成，块数={chunks}")
     except Exception as e:
         logger.warning(f"[{source_id}] 向量化失败: {e}")
@@ -1112,7 +1115,7 @@ async def import_url(
         relations = result_data.get("relations", [])
 
         if entities:
-            graph = get_graph()
+            graph = await _load_graph_for_session(db, request.session_id)
             name_to_node_id: dict[str, int] = {}
 
             for entity in entities:
@@ -1126,9 +1129,10 @@ async def import_url(
                         graph.graph.nodes[existing_id]["confidence"] = max(
                             node_data.get("confidence", 0), entity.get("confidence", 0.5)
                         )
-                        db_result = await db.execute(
-                            select(KnowledgeNode).where(KnowledgeNode.id == existing_id)
-                        )
+                        db_query = select(KnowledgeNode).where(KnowledgeNode.id == existing_id)
+                        if request.session_id:
+                            db_query = db_query.where(KnowledgeNode.session_id == request.session_id)
+                        db_result = await db.execute(db_query)
                         db_node = db_result.scalar_one_or_none()
                         if db_node:
                             db_node.source_count = new_count
@@ -1190,8 +1194,6 @@ async def import_url(
                         "evidence_segment_id": rel.get("_segment_id"),
                         "session_id": request.session_id,
                     })
-
-            graph.save_json()
             node_count = len(entities)
 
         for seg in segment_records:
@@ -1217,6 +1219,7 @@ async def import_url(
 @router.post("/build-communities")
 async def build_communities(
     force: bool = Query(False, description="强制重建社区"),
+    session_id: Optional[str] = Query(None, description="会话ID，用于数据隔离"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -1225,11 +1228,8 @@ async def build_communities(
     在知识库构建完成后调用，为 RAG 问答提供图谱级上下文增强
     """
     try:
-        graph = get_graph()
-        if graph.node_count() == 0:
-            await graph.load_from_db(db)
-
-        graph_rag = get_graph_rag_service()
+        graph = await _load_graph_for_session(db, session_id)
+        graph_rag = get_graph_rag_service(graph)
         result = await graph_rag.build_communities(force=force)
         return result
     except Exception as e:

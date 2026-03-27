@@ -79,6 +79,12 @@ OVERLY_BROAD = {
     "tool", "application", "problem", "solution", "approach",
 }
 
+TECH_ABBREVIATION_ALLOWLIST = {
+    "AI", "ML", "DL", "CNN", "RNN", "GAN", "LLM", "NLP", "CV", "RL",
+    "OCR", "ASR", "API", "SDK", "SQL", "GPU", "CPU", "CLI", "IDE",
+    "HTTP", "HTTPS", "TCP", "UDP", "GD",
+}
+
 
 class KnowledgeExtractor:
     """
@@ -243,6 +249,11 @@ class KnowledgeExtractor:
     @staticmethod
     def _is_noise_entity(name: str) -> bool:
         """判断实体名是否为噪声"""
+        stripped = name.strip()
+        if stripped in TECH_ABBREVIATION_ALLOWLIST:
+            return False
+        if re.match(r'^[A-Z][A-Z0-9]{1,4}$', stripped):
+            return False
         lower = name.strip().lower()
         # 纯英文噪声词
         if lower in NOISE_EN_WORDS:
@@ -258,7 +269,7 @@ class KnowledgeExtractor:
             return True
         if len(name) == 1:
             return True
-        # 纯英文且长度<=3（很可能是 ASR 碎片如 "bud"、"the"）
+        # 纯英文且长度<=3（大写技术缩写已在上方豁免）
         if re.match(r'^[a-zA-Z]{1,3}$', name):
             return True
         # 纯标点或特殊字符

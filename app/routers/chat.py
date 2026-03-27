@@ -42,6 +42,14 @@ def _get_graph_rag() -> GraphRAGService:
         _graph_rag = GraphRAGService(get_graph())
     return _graph_rag
 
+
+async def _load_request_graph(db: AsyncSession, session_id: Optional[str]) -> "GraphStore":
+    from app.services.graph_store import GraphStore
+
+    graph = GraphStore()
+    await graph.load_from_db(db, session_id=session_id)
+    return graph
+
 def _get_llm_client() -> OpenAI:
     """获取 LLM 客户端"""
     if not settings.openai_api_key:
@@ -329,20 +337,10 @@ async def _is_related_to_collection(db: AsyncSession, folder_ids: List[int], que
     return (count or 0) > 0
 
 async def _get_folder_ids_for_session(db: AsyncSession, session_id: str, media_ids: Optional[List[int]]) -> List[int]:
-    """根据 session 和 media_id 获取内部 folder_id（支持跨 session 查找同用户数据）"""
-    from app.models import UserSession
-    # 1. 尝试获取当前 session 的 mid
-    mid_result = await db.execute(select(UserSession.bili_mid).where(UserSession.session_id == session_id))
-    mid = mid_result.scalar()
-    target_session_ids = [session_id]
-    if mid:
-        # 查找该用户所有的 Session ID
-        sessions_result = await db.execute(select(UserSession.session_id).where(UserSession.bili_mid == mid))
-        target_session_ids = [row[0] for row in sessions_result.fetchall()]
-    # 构建查询：按 media_id 去重，只保留最新的一条
+    """根据 session 和 media_id 获取内部 folder_id。"""
     stmt = (
         select(FavoriteFolder.id, FavoriteFolder.media_id, FavoriteFolder.updated_at)
-        .where(FavoriteFolder.session_id.in_(target_session_ids))
+        .where(FavoriteFolder.session_id == session_id)
         .order_by(FavoriteFolder.updated_at.desc())
     )
     if media_ids:
@@ -498,9 +496,7 @@ async def _prepare_messages(request: ChatRequest, db: AsyncSession) -> tuple[lis
 
     # 5) 图谱检索路由 —— 新增
     if route_type == "graph":
-        graph = get_graph()
-        if graph.node_count() == 0:
-            await graph.load_from_db(db)
+        graph = await _load_request_graph(db, request.session_id)
         graph_result = await query_router.execute_graph_search(question, graph, db)
         context = graph_result.get("context", "")
         if context:
@@ -532,9 +528,7 @@ async def _prepare_messages(request: ChatRequest, db: AsyncSession) -> tuple[lis
 
     # 6) 学习路径路由 —— 新增
     if route_type == "path":
-        graph = get_graph()
-        if graph.node_count() == 0:
-            await graph.load_from_db(db)
+        graph = await _load_request_graph(db, request.session_id)
         # 提取目标知识点
         keywords = query_router._extract_keywords(question)
         target_node = None
@@ -602,10 +596,10 @@ async def _prepare_messages(request: ChatRequest, db: AsyncSession) -> tuple[lis
         # GraphRAG: 注入社区上下文
         community_context = ""
         try:
-            graph_rag = _get_graph_rag()
+            graph = await _load_request_graph(db, request.session_id)
+            graph_rag = GraphRAGService(graph)
             if graph_rag.is_built:
                 keywords = _extract_keywords(question)
-                graph = get_graph()
                 matched_node_ids = []
                 for kw in keywords:
                     results = graph.search_nodes_by_name(kw, limit=3)

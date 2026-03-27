@@ -33,9 +33,20 @@ NOISE_ZH_NAMES = {
     "视频", "内容", "东西", "事情",
 }
 
+TECH_ABBREVIATION_ALLOWLIST = {
+    "AI", "ML", "DL", "CNN", "RNN", "GAN", "LLM", "NLP", "CV", "RL",
+    "OCR", "ASR", "API", "SDK", "SQL", "GPU", "CPU", "CLI", "IDE",
+    "HTTP", "HTTPS", "TCP", "UDP", "GD",
+}
+
 
 def _is_noise_name(name: str) -> bool:
     """判断节点名是否为噪声"""
+    stripped = name.strip()
+    if stripped in TECH_ABBREVIATION_ALLOWLIST:
+        return False
+    if re.match(r'^[A-Z][A-Z0-9]{1,4}$', stripped):
+        return False
     if name in NOISE_ZH_NAMES:
         return True
     for pat in NOISE_PATTERNS:

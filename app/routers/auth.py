@@ -172,6 +172,15 @@ async def logout(session_id: str):
     """
     if session_id in login_sessions:
         del login_sessions[session_id]
+
+    async with get_db_context() as db:
+        result = await db.execute(
+            select(UserSessionModel).where(UserSessionModel.session_id == session_id)
+        )
+        db_session = result.scalar_one_or_none()
+        if db_session:
+            db_session.is_valid = False
+            await db.commit()
     
     return {"message": "已退出登录"}
 

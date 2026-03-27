@@ -3,58 +3,45 @@ BiliMind 知识树学习导航系统
 
 知识树路由 — 树结构、节点详情、视频详情
 """
-from typing import Optional, List
+import re
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Depends
 from loguru import logger
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import (
-    KnowledgeNode, KnowledgeEdge, NodeSegmentLink, Segment, VideoCache,
-    TreeNodeInfo, NodeDetailInfo, VideoDetailInfo, SegmentInfo, _fmt_time,
-)
+from app.models import KnowledgeNode, KnowledgeEdge, NodeSegmentLink, Segment, VideoCache, _fmt_time
 from app.services.graph_store import GraphStore
 from app.services.tree_builder import TreeBuilder, _is_noise_name, _compute_grade
 from app.services.path_recommender import PathRecommender
+from app.services.evidence_ranker import get_evidence_ranker, build_reason, rule_score_segment_match, confidence_level_from_score
 from app.config import settings
 
 router = APIRouter(prefix="/tree", tags=["知识树"])
 
-# 全局图存储和树构建器实例
-_graph_store: Optional[GraphStore] = None
-_tree_builder: Optional[TreeBuilder] = None
+async def _load_graph_store(db: AsyncSession, session_id: Optional[str] = None) -> GraphStore:
+    """为当前请求加载隔离后的图谱快照。"""
+    gs = GraphStore(graph_path=settings.graph_persist_path)
+    await gs.load_from_db(db, session_id=session_id)
+    return gs
 
 
-def get_graph_store() -> GraphStore:
-    global _graph_store
-    if _graph_store is None:
-        _graph_store = GraphStore(graph_path=settings.graph_persist_path)
-        _graph_store.load_json()
-    return _graph_store
+def _make_tree_builder(gs: GraphStore) -> TreeBuilder:
+    return TreeBuilder(gs)
 
 
-def get_tree_builder() -> TreeBuilder:
-    global _tree_builder
-    if _tree_builder is None:
-        _tree_builder = TreeBuilder(get_graph_store())
-    return _tree_builder
+def _make_path_recommender(gs: GraphStore) -> PathRecommender:
+    return PathRecommender(gs)
 
 
-def get_path_recommender() -> PathRecommender:
-    return PathRecommender(get_graph_store())
-
-
-def _get_community_ids() -> dict[int, int]:
-    """获取社区 ID 映射（如果已构建）"""
-    try:
-        from app.routers.knowledge import get_graph_rag_service
-        graph_rag = get_graph_rag_service()
-        if graph_rag.is_built:
-            return graph_rag.get_all_community_ids()
-    except Exception:
-        pass
-    return {}
+def _score_segment_match(
+    node: KnowledgeNode,
+    link: NodeSegmentLink,
+    segment: Segment,
+    video: Optional[VideoCache] = None,
+) -> float:
+    return rule_score_segment_match(node, link, segment, video)
 
 
 @router.get("")
@@ -67,12 +54,8 @@ async def get_knowledge_tree(
 ):
     """获取完整知识树结构（支持主题筛选和阶段筛选）"""
     try:
-        gs = get_graph_store()
-        # 如果图为空或指定了 session_id，从 DB 加载（按 session 过滤）
-        if gs.node_count() == 0 or session_id:
-            await gs.load_from_db(db, session_id=session_id)
-
-        builder = get_tree_builder()
+        gs = await _load_graph_store(db, session_id=session_id)
+        builder = _make_tree_builder(gs)
         tree_data = builder.build_tree(min_confidence=min_confidence)
 
         # 主题筛选：只返回指定 topic 的子树
@@ -89,7 +72,7 @@ async def get_knowledge_tree(
             tree_data["tree"] = _filter_tree_by_difficulty(tree_data["tree"], diff_range)
 
         # 填充每个节点的 video_count
-        await _fill_video_counts(tree_data["tree"], db)
+        await _fill_video_counts(tree_data["tree"], db, session_id=session_id)
 
         return tree_data
     except Exception as e:
@@ -106,14 +89,12 @@ async def get_knowledge_graph(
 ):
     """获取完整知识图谱数据（适配 3D force-graph 可视化）"""
     try:
-        gs = get_graph_store()
-        if gs.node_count() == 0 or session_id:
-            await gs.load_from_db(db, session_id=session_id)
+        gs = await _load_graph_store(db, session_id=session_id)
 
         threshold = min_confidence or settings.tree_min_confidence
 
-        # 获取社区映射
-        community_map = _get_community_ids()
+        # 社区信息当前不跨用户缓存，避免串号
+        community_map: dict[int, int] = {}
 
         # 收集并过滤节点
         all_nodes = gs.all_nodes()
@@ -235,16 +216,15 @@ async def get_node_detail(
     if not node:
         raise HTTPException(status_code=404, detail="节点不存在")
 
-    gs = get_graph_store()
-    if gs.node_count() == 0 or session_id:
-        await gs.load_from_db(db, session_id=session_id)
+    gs = await _load_graph_store(db, session_id=session_id)
 
     # 主归属
     main_topic = None
     if node.main_topic_id:
-        topic_result = await db.execute(
-            select(KnowledgeNode).where(KnowledgeNode.id == node.main_topic_id)
-        )
+        topic_query = select(KnowledgeNode).where(KnowledgeNode.id == node.main_topic_id)
+        if session_id:
+            topic_query = topic_query.where(KnowledgeNode.session_id == session_id)
+        topic_result = await db.execute(topic_query)
         topic = topic_result.scalar_one_or_none()
         if topic:
             main_topic = {"id": topic.id, "name": topic.name}
@@ -262,48 +242,101 @@ async def get_node_detail(
             related_topics.append({"id": t["id"], "name": t.get("name", "")})
 
     # 关联视频和片段
-    links_result = await db.execute(
-        select(NodeSegmentLink).where(NodeSegmentLink.node_id == node_id)
-    )
+    links_query = select(NodeSegmentLink).where(NodeSegmentLink.node_id == node_id)
+    if session_id:
+        links_query = links_query.where(NodeSegmentLink.session_id == session_id)
+    links_result = await db.execute(links_query)
     links = links_result.scalars().all()
 
-    # 收集视频 bvid
-    video_bvids = list(set(link.video_bvid for link in links if link.video_bvid))
+    segment_ids = [link.segment_id for link in links if link.segment_id]
+    segment_map: dict[int, Segment] = {}
+    if segment_ids:
+        segment_query = select(Segment).where(Segment.id.in_(segment_ids))
+        if session_id:
+            segment_query = segment_query.where(Segment.session_id == session_id)
+        seg_rows = await db.execute(segment_query)
+        segment_map = {seg.id: seg for seg in seg_rows.scalars().all()}
+
+    video_map: dict[str, VideoCache] = {}
+    if segment_map:
+        related_bvids = list({seg.video_bvid for seg in segment_map.values() if seg.video_bvid})
+        if related_bvids:
+            video_rows = await db.execute(select(VideoCache).where(VideoCache.bvid.in_(related_bvids)))
+            video_map = {item.bvid: item for item in video_rows.scalars().all()}
+
+    # 收集并排序视频证据
+    ranker = get_evidence_ranker()
+    scored_links: list[tuple[NodeSegmentLink, Segment, float, float]] = []
+    for link in links:
+        seg = segment_map.get(link.segment_id)
+        if not seg:
+            continue
+        bvid = link.video_bvid or seg.video_bvid
+        video = video_map.get(bvid) if bvid else None
+        score_payload = ranker.score(node, link, seg, video)
+        score = float(score_payload["score"])
+        model_score = float(score_payload["model_score"])
+        if not bool(score_payload["is_relevant"]):
+            continue
+        scored_links.append((link, seg, score, model_score))
+
+    scored_links.sort(
+        key=lambda item: (
+            -item[2],
+            -item[3],
+            item[1].start_time if item[1].start_time is not None else 10**9,
+            item[1].segment_index,
+        )
+    )
+
+    video_scores: dict[str, dict] = {}
+    support_count = len({seg.video_bvid for _, seg, _, _ in scored_links if seg.video_bvid})
+    for link, seg, score, model_score in scored_links:
+        bvid = link.video_bvid or seg.video_bvid
+        if not bvid:
+            continue
+        entry = video_scores.setdefault(bvid, {"score": score, "segments": []})
+        entry["score"] = max(entry["score"], score)
+        if len(entry["segments"]) >= 3:
+            continue
+        entry["segments"].append({
+            "id": seg.id,
+            "start_time": seg.start_time,
+            "end_time": seg.end_time,
+            "text": (seg.cleaned_text or seg.raw_text)[:240],
+            "time_label": f"{_fmt_time(seg.start_time)}-{_fmt_time(seg.end_time)}" if seg.start_time is not None else "",
+            "match_confidence": round(score, 3),
+            "confidence_level": confidence_level_from_score(score),
+            "match_reason": build_reason(
+                node,
+                seg.cleaned_text or seg.raw_text,
+                semantic_boost=model_score,
+                support_count=support_count,
+                video_title=video_map.get(bvid).title if video_map.get(bvid) else "",
+            ),
+        })
+
+    video_bvids = list(video_scores.keys())
     videos = []
     if video_bvids:
         vids_result = await db.execute(
             select(VideoCache).where(VideoCache.bvid.in_(video_bvids))
         )
         for vc in vids_result.scalars().all():
-            # 获取该视频关联的片段
-            vid_segments = []
-            for link in links:
-                if link.video_bvid == vc.bvid:
-                    seg_result = await db.execute(
-                        select(Segment).where(Segment.id == link.segment_id)
-                    )
-                    seg = seg_result.scalar_one_or_none()
-                    if seg:
-                        vid_segments.append({
-                            "id": seg.id,
-                            "start_time": seg.start_time,
-                            "end_time": seg.end_time,
-                            "text": (seg.cleaned_text or seg.raw_text)[:200],
-                            "time_label": f"{_fmt_time(seg.start_time)}-{_fmt_time(seg.end_time)}" if seg.start_time is not None else "",
-                        })
-
             videos.append({
                 "bvid": vc.bvid,
                 "title": vc.title,
                 "owner_name": vc.owner_name,
                 "pic_url": vc.pic_url,
                 "duration": vc.duration,
-                "segments": vid_segments,
+                "evidence_score": round(video_scores[vc.bvid]["score"], 3),
+                "segments": video_scores[vc.bvid]["segments"],
                 "url": f"https://www.bilibili.com/video/{vc.bvid}",
             })
+    videos.sort(key=lambda v: (-v["evidence_score"], v["title"]))
 
     # 树中位置
-    builder = get_tree_builder()
+    builder = _make_tree_builder(gs)
     tree_position = builder.get_node_tree_position(node_id)
 
     return {
@@ -333,33 +366,37 @@ async def get_video_detail(
     db: AsyncSession = Depends(get_db),
 ):
     """获取视频详情（知识点 + 时间片段 + 树中位置）"""
-    video_query = select(VideoCache).where(VideoCache.bvid == bvid)
-    if session_id:
-        video_query = video_query.where(VideoCache.session_id == session_id)
-    result = await db.execute(video_query)
+    result = await db.execute(select(VideoCache).where(VideoCache.bvid == bvid))
     video = result.scalar_one_or_none()
     if not video:
         raise HTTPException(status_code=404, detail="视频不存在")
 
     # 获取片段
-    seg_result = await db.execute(
-        select(Segment).where(Segment.video_bvid == bvid)
-        .order_by(Segment.segment_index)
-    )
+    seg_query = select(Segment).where(Segment.video_bvid == bvid)
+    if session_id:
+        seg_query = seg_query.where(Segment.session_id == session_id)
+    seg_result = await db.execute(seg_query.order_by(Segment.segment_index))
     segments = seg_result.scalars().all()
 
     # 获取关联知识节点
-    link_result = await db.execute(
-        select(NodeSegmentLink).where(NodeSegmentLink.video_bvid == bvid)
-    )
+    link_query = select(NodeSegmentLink).where(NodeSegmentLink.video_bvid == bvid)
+    if session_id:
+        link_query = link_query.where(NodeSegmentLink.session_id == session_id)
+    link_result = await db.execute(link_query)
     links = link_result.scalars().all()
+
+    if session_id and not segments and not links:
+        raise HTTPException(status_code=404, detail="当前用户下视频不存在")
 
     node_ids = list(set(link.node_id for link in links))
     knowledge_nodes = []
     if node_ids:
-        nodes_result = await db.execute(
-            select(KnowledgeNode).where(KnowledgeNode.id.in_(node_ids))
-        )
+        nodes_query = select(KnowledgeNode).where(KnowledgeNode.id.in_(node_ids))
+        if session_id:
+            nodes_query = nodes_query.where(KnowledgeNode.session_id == session_id)
+        nodes_result = await db.execute(nodes_query)
+        gs = await _load_graph_store(db, session_id=session_id)
+        builder = _make_tree_builder(gs)
         for kn in nodes_result.scalars().all():
             # 找该节点在本视频中的时间范围
             node_segments = []
@@ -374,10 +411,6 @@ async def get_video_detail(
                             })
 
             # 树中位置
-            gs = get_graph_store()
-            if gs.node_count() == 0 or session_id:
-                await gs.load_from_db(db, session_id=session_id)
-            builder = get_tree_builder()
             position = builder.get_node_tree_position(kn.id)
 
             knowledge_nodes.append({
@@ -428,19 +461,20 @@ async def get_node_segments(
     db: AsyncSession = Depends(get_db),
 ):
     """获取节点关联的所有片段"""
-    links_result = await db.execute(
-        select(NodeSegmentLink).where(NodeSegmentLink.node_id == node_id)
-    )
+    links_query = select(NodeSegmentLink).where(NodeSegmentLink.node_id == node_id)
+    if session_id:
+        links_query = links_query.where(NodeSegmentLink.session_id == session_id)
+    links_result = await db.execute(links_query)
     links = links_result.scalars().all()
 
     if not links:
         return []
 
     segment_ids = [link.segment_id for link in links]
-    seg_result = await db.execute(
-        select(Segment).where(Segment.id.in_(segment_ids))
-        .order_by(Segment.start_time)
-    )
+    seg_query = select(Segment).where(Segment.id.in_(segment_ids))
+    if session_id:
+        seg_query = seg_query.where(Segment.session_id == session_id)
+    seg_result = await db.execute(seg_query.order_by(Segment.start_time))
 
     return [
         {
@@ -468,9 +502,7 @@ async def get_learning_path(
     db: AsyncSession = Depends(get_db),
 ):
     """生成学习路径推荐"""
-    gs = get_graph_store()
-    if gs.node_count() == 0 or session_id:
-        await gs.load_from_db(db, session_id=session_id)
+    gs = await _load_graph_store(db, session_id=session_id)
 
     if not gs.has_node(node_id):
         raise HTTPException(status_code=404, detail="Node not found")
@@ -485,26 +517,26 @@ async def get_learning_path(
         except ValueError:
             pass
 
-    recommender = get_path_recommender()
+    recommender = _make_path_recommender(gs)
     result = recommender.recommend_path(node_id, mode=mode, known_node_ids=known_ids)
 
     # 为每个步骤填充视频信息
     for step in result.get("steps", []):
         nid = step["node_id"]
-        vid_count = await db.scalar(
-            select(func.count(func.distinct(NodeSegmentLink.video_bvid)))
-            .where(NodeSegmentLink.node_id == nid)
+        vid_count_query = select(func.count(func.distinct(NodeSegmentLink.video_bvid))).where(
+            NodeSegmentLink.node_id == nid
         )
+        if session_id:
+            vid_count_query = vid_count_query.where(NodeSegmentLink.session_id == session_id)
+        vid_count = await db.scalar(vid_count_query)
         step["has_videos"] = (vid_count or 0) > 0
         step["video_count"] = vid_count or 0
 
         # 获取代表性视频（最多2个）
-        links = await db.execute(
-            select(NodeSegmentLink.video_bvid)
-            .where(NodeSegmentLink.node_id == nid)
-            .distinct()
-            .limit(2)
-        )
+        links_query = select(NodeSegmentLink.video_bvid).where(NodeSegmentLink.node_id == nid)
+        if session_id:
+            links_query = links_query.where(NodeSegmentLink.session_id == session_id)
+        links = await db.execute(links_query.distinct().limit(2))
         bvids = [row[0] for row in links.fetchall()]
         step["videos"] = []
         for bvid in bvids:
@@ -512,16 +544,20 @@ async def get_learning_path(
             video = vc.scalar_one_or_none()
             if video:
                 # 获取该节点在该视频中的片段
-                seg_links = await db.execute(
-                    select(NodeSegmentLink.segment_id)
-                    .where(NodeSegmentLink.node_id == nid, NodeSegmentLink.video_bvid == bvid)
+                seg_links_query = select(NodeSegmentLink.segment_id).where(
+                    NodeSegmentLink.node_id == nid,
+                    NodeSegmentLink.video_bvid == bvid,
                 )
+                if session_id:
+                    seg_links_query = seg_links_query.where(NodeSegmentLink.session_id == session_id)
+                seg_links = await db.execute(seg_links_query)
                 seg_ids = [r[0] for r in seg_links.fetchall()]
                 segs = []
                 if seg_ids:
-                    seg_result = await db.execute(
-                        select(Segment).where(Segment.id.in_(seg_ids)).order_by(Segment.start_time)
-                    )
+                    seg_query = select(Segment).where(Segment.id.in_(seg_ids))
+                    if session_id:
+                        seg_query = seg_query.where(Segment.session_id == session_id)
+                    seg_result = await db.execute(seg_query.order_by(Segment.start_time))
                     for seg in seg_result.scalars().all():
                         segs.append({
                             "time_label": f"{_fmt_time(seg.start_time)}-{_fmt_time(seg.end_time)}" if seg.start_time is not None else "",
@@ -534,6 +570,28 @@ async def get_learning_path(
                     "url": f"https://www.bilibili.com/video/{video.bvid}",
                     "segments": segs,
                 })
+        segment_count = sum(len(video.get("segments", [])) for video in step["videos"])
+        evidence_score = min(1.0, (min(3, step["video_count"]) / 3.0) * 0.65 + (min(4, segment_count) / 4.0) * 0.35)
+        priority_score = float(step.get("priority_score", 0.0) or 0.0)
+        step["segment_count"] = segment_count
+        step["evidence_score"] = round(evidence_score, 3)
+        step["composite_score"] = round(priority_score * 0.7 + evidence_score * 0.3, 3)
+        if evidence_score >= 0.75:
+            step["support_label"] = "strong"
+        elif evidence_score >= 0.45:
+            step["support_label"] = "medium"
+        else:
+            step["support_label"] = "weak"
+
+    if result.get("steps"):
+        summary = result.get("summary") or {}
+        steps = result["steps"]
+        summary.update({
+            "avg_evidence_score": round(sum(float(step.get("evidence_score", 0.0) or 0.0) for step in steps) / len(steps), 3),
+            "avg_composite_score": round(sum(float(step.get("composite_score", 0.0) or 0.0) for step in steps) / len(steps), 3),
+            "strong_support_steps": sum(1 for step in steps if step.get("support_label") == "strong"),
+        })
+        result["summary"] = summary
 
     return result
 
@@ -623,9 +681,10 @@ async def review_node(
     if action not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail="action 必须为 approve 或 reject")
 
-    result = await db.execute(
-        select(KnowledgeNode).where(KnowledgeNode.id == node_id)
-    )
+    query = select(KnowledgeNode).where(KnowledgeNode.id == node_id)
+    if session_id:
+        query = query.where(KnowledgeNode.session_id == session_id)
+    result = await db.execute(query)
     node = result.scalar_one_or_none()
     if not node:
         raise HTTPException(status_code=404, detail="节点不存在")
@@ -633,29 +692,26 @@ async def review_node(
     node.review_status = "approved" if action == "approve" else "rejected"
     await db.commit()
 
-    # 同步图
-    gs = get_graph_store()
-    if gs.has_node(node_id):
-        gs.graph.nodes[node_id]["review_status"] = node.review_status
-
     return {"message": f"节点 {node.name} 已{action}", "review_status": node.review_status}
 
 
 # ==================== 辅助函数 ====================
 
-async def _fill_video_counts(tree_nodes: list[dict], db: AsyncSession) -> None:
+async def _fill_video_counts(tree_nodes: list[dict], db: AsyncSession, session_id: Optional[str] = None) -> None:
     """递归填充树节点的 video_count"""
     for node in tree_nodes:
         node_id = node.get("id")
         if node_id and node_id > 0:
-            count = await db.scalar(
-                select(func.count(func.distinct(NodeSegmentLink.video_bvid)))
-                .where(NodeSegmentLink.node_id == node_id)
+            count_query = select(func.count(func.distinct(NodeSegmentLink.video_bvid))).where(
+                NodeSegmentLink.node_id == node_id
             )
+            if session_id:
+                count_query = count_query.where(NodeSegmentLink.session_id == session_id)
+            count = await db.scalar(count_query)
             node["video_count"] = count or 0
 
         if node.get("children"):
-            await _fill_video_counts(node["children"], db)
+            await _fill_video_counts(node["children"], db, session_id=session_id)
 
 
 def _filter_tree_by_difficulty(tree: list[dict], diff_range: tuple[int, int]) -> list[dict]:

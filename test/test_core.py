@@ -465,6 +465,9 @@ def test_config_new_fields():
     assert hasattr(s, "extraction_min_confidence")
     assert hasattr(s, "tree_min_confidence")
     assert hasattr(s, "extraction_segment_merge_seconds")
+    assert hasattr(s, "ml_artifact_dir")
+    assert hasattr(s, "evidence_ranker_model_path")
+    assert hasattr(s, "organizer_classifier_model_path")
     assert s.extraction_min_confidence == 0.3
     assert s.tree_min_confidence == 0.4
 
@@ -609,10 +612,362 @@ def test_all_routes_registered():
     """测试所有路由在 app 中正确注册"""
     from app.main import app
     route_paths = [r.path for r in app.routes if hasattr(r, "path")]
-    expected = ["/tree", "/search", "/learning-path/generate", "/chat/ask", "/knowledge/build"]
+    expected = ["/tree", "/search", "/learning-path/generate", "/chat/ask", "/knowledge/build", "/organizer/report"]
     for exp in expected:
         assert any(exp in p for p in route_paths), f"Route {exp} not found in {route_paths}"
     print("PASS test_all_routes_registered")
+
+
+def test_video_organizer_classification():
+    """测试 Organizer 分类规则"""
+    from app.services.video_organizer import VideoFeatures, VideoOrganizerService
+
+    service = VideoOrganizerService(db=None)  # 仅测试纯规则逻辑
+    item = VideoFeatures(
+        bvid="BV1demo",
+        title="AI Agent 从入门到实战 第1讲",
+        description="大模型 agent 项目教程，手把手搭建工作流",
+        summary="讲解 Agent 原理、工作流和实战案例",
+        owner_name="tester",
+        duration=1800,
+        pic_url=None,
+        folder_ids=[1],
+        folder_titles=["AI 主线"],
+        segment_count=12,
+        claim_count=8,
+        concept_count=5,
+        knowledge_node_count=7,
+        avg_node_difficulty=3.6,
+        node_names=["Agent", "Workflow", "Prompt"],
+        node_types=["concept", "method"],
+        node_confidence_avg=0.82,
+        tags=["AI", "Agent"],
+    )
+
+    result = service._analyze_video(item)
+    assert "AI" in result["subject_tags"]
+    assert result["content_type"] == "教程实战"
+    assert result["difficulty_level"] in {"进阶", "高阶"}
+    assert result["value_tier"] == "主线核心"
+    assert result["organize_score"] >= 70
+    print("PASS test_video_organizer_classification")
+
+
+def test_video_organizer_series_detection():
+    """测试 Organizer 系列识别"""
+    from app.services.video_organizer import VideoOrganizerService
+
+    service = VideoOrganizerService(db=None)
+    videos = [
+        {"bvid": "BV1", "title": "AI Agent 从入门到实战 第1讲", "organize_score": 82, "difficulty_level": "进阶"},
+        {"bvid": "BV2", "title": "AI Agent 从入门到实战 第2讲", "organize_score": 80, "difficulty_level": "进阶"},
+        {"bvid": "BV3", "title": "前端工程化速查", "organize_score": 60, "difficulty_level": "入门"},
+    ]
+    groups = service._detect_series_groups(videos)
+    assert len(groups) == 1
+    assert groups[0]["video_count"] == 2
+    assert {item["bvid"] for item in groups[0]["videos"]} == {"BV1", "BV2"}
+    print("PASS test_video_organizer_series_detection")
+
+
+def test_video_organizer_duplicate_detection():
+    """测试 Organizer 重复识别"""
+    from app.services.video_organizer import VideoOrganizerService
+
+    service = VideoOrganizerService(db=None)
+    videos = [
+        {
+            "bvid": "BVkeep",
+            "title": "React 项目实战教程",
+            "subject_tags": ["前端"],
+            "folder_titles": ["前端"],
+            "duration": 1200,
+            "knowledge_node_count": 6,
+            "organize_score": 86,
+            "series_key": None,
+        },
+        {
+            "bvid": "BVarc",
+            "title": "React 实战项目教程",
+            "subject_tags": ["前端"],
+            "folder_titles": ["前端收藏"],
+            "duration": 1260,
+            "knowledge_node_count": 5,
+            "organize_score": 62,
+            "series_key": None,
+        },
+        {
+            "bvid": "BVother",
+            "title": "算法基础入门",
+            "subject_tags": ["算法"],
+            "folder_titles": ["算法"],
+            "duration": 900,
+            "knowledge_node_count": 2,
+            "organize_score": 58,
+            "series_key": None,
+        },
+    ]
+
+    groups = service._detect_duplicate_groups(videos)
+    assert len(groups) == 1
+    assert groups[0]["recommended_keep_bvid"] == "BVkeep"
+    assert "BVarc" in groups[0]["archive_candidates"]
+    print("PASS test_video_organizer_duplicate_detection")
+
+
+def test_lightweight_binary_model():
+    """测试轻量二分类模型可训练并分离简单样本"""
+    from app.services.lightweight_models import HashedBinaryLogisticModel, SparseSample
+
+    samples = [
+        SparseSample(label=1.0, numeric_features={"overlap": 2.0, "confidence": 0.9}, token_features=["node::cnn", "overlap::cnn"]),
+        SparseSample(label=1.0, numeric_features={"overlap": 1.5, "confidence": 0.8}, token_features=["node::agent"]),
+        SparseSample(label=0.0, numeric_features={"overlap": 0.0, "confidence": 0.2}, token_features=["noise::random"]),
+        SparseSample(label=0.0, numeric_features={"overlap": 0.1, "confidence": 0.1}, token_features=["noise::other"]),
+    ]
+    model = HashedBinaryLogisticModel(buckets=256)
+    model.fit(samples, epochs=12, lr=0.1)
+    pos = model.predict_proba({"overlap": 2.0, "confidence": 0.9}, ["node::cnn"])
+    neg = model.predict_proba({"overlap": 0.0, "confidence": 0.1}, ["noise::random"])
+    assert pos > neg
+    assert pos > 0.5
+    assert neg < 0.5
+    print("PASS test_lightweight_binary_model")
+
+
+def test_lightweight_multiclass_model():
+    """测试轻量多分类模型可训练并输出类别"""
+    from app.services.lightweight_models import HashedMulticlassOVRModel
+
+    dataset = [
+        ("教程实战", {"duration": 5.0, "claims": 6.0}, ["tok::项目", "tok::实战"]),
+        ("教程实战", {"duration": 4.5, "claims": 5.5}, ["tok::教程", "tok::搭建"]),
+        ("概念讲解", {"duration": 2.0, "claims": 2.0}, ["tok::原理", "tok::概念"]),
+        ("概念讲解", {"duration": 2.5, "claims": 1.5}, ["tok::本质", "tok::理解"]),
+    ]
+    model = HashedMulticlassOVRModel(labels=["教程实战", "概念讲解"], buckets=256)
+    model.fit(dataset, epochs=10, lr=0.1)
+    label, confidence, _ = model.predict({"duration": 5.0, "claims": 6.0}, ["tok::项目", "tok::实战"])
+    assert label == "教程实战"
+    assert confidence > 0.5
+    print("PASS test_lightweight_multiclass_model")
+
+
+def test_evidence_ranker_metrics():
+    """测试证据判别器评估指标计算"""
+    from app.services.evidence_ranker_metrics import compute_auc, compute_classification_metrics, compute_query_metrics
+
+    labels = [1, 1, 0, 0]
+    scores = [0.91, 0.77, 0.42, 0.18]
+    metrics = compute_classification_metrics(labels, scores, threshold=0.6)
+    assert metrics["accuracy"] >= 0.99
+    assert metrics["precision"] >= 0.99
+    assert metrics["recall"] >= 0.99
+    assert compute_auc(labels, scores) >= 0.99
+
+    query_metrics = compute_query_metrics([
+        {"query_id": "q1", "label": 1, "relevance_score": 0.92, "rule_score": 0.8, "segment_id": 1},
+        {"query_id": "q1", "label": 0, "relevance_score": 0.30, "rule_score": 0.5, "segment_id": 2},
+        {"query_id": "q2", "label": 0, "relevance_score": 0.40, "rule_score": 0.7, "segment_id": 3},
+        {"query_id": "q2", "label": 1, "relevance_score": 0.20, "rule_score": 0.3, "segment_id": 4},
+    ], score_key="relevance_score", threshold=0.6)
+    assert query_metrics["queries"] == 2
+    assert query_metrics["displayed_queries"] == 1
+    assert query_metrics["top1_precision"] == 1.0
+    assert query_metrics["empty_state_rate"] == 0.5
+    print("PASS test_evidence_ranker_metrics")
+
+
+def test_evidence_ranker_score_record_prefers_precomputed_features():
+    """测试离线推理优先复用样本自带特征，避免口径漂移"""
+    from app.services.evidence_ranker import EvidenceRanker
+    from app.services.lightweight_models import HashedBinaryLogisticModel, SparseSample
+
+    model = HashedBinaryLogisticModel(buckets=128)
+    samples = [
+        SparseSample(label=1.0, numeric_features={"overlap": 2.0, "rule_score": 0.7}, token_features=["node::cnn", "overlap::cnn"]),
+        SparseSample(label=0.0, numeric_features={"overlap": 0.0, "rule_score": 0.1}, token_features=["noise::other"]),
+    ]
+    model.fit(samples, epochs=12, lr=0.1)
+
+    ranker = EvidenceRanker(model_path="/tmp/nonexistent-evidence-ranker.json")
+    ranker.model = model
+    result = ranker.score_record({
+        "label": 1,
+        "rule_score": 0.7,
+        "numeric_features": {"overlap": 2.0, "rule_score": 0.7},
+        "token_features": ["node::cnn", "overlap::cnn"],
+    })
+    assert result.model_score > 0.5
+    assert result.relevance_score > 0.6
+    assert result.is_relevant
+    print("PASS test_evidence_ranker_score_record_prefers_precomputed_features")
+
+
+def test_evidence_ranker_loads_saved_model():
+    """训练产物必须能被 EvidenceRanker 真正加载，避免评估静默退回规则基线"""
+    from app.services.evidence_ranker import EvidenceRanker
+    from app.services.lightweight_models import HashedBinaryLogisticModel, SparseSample
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
+        model_path = handle.name
+
+    try:
+        model = HashedBinaryLogisticModel(buckets=64, metadata={"task": "test_evidence_ranker"})
+        samples = [
+            SparseSample(
+                label=1.0,
+                numeric_features={"overlap_ratio": 0.9, "rule_score": 0.62},
+                token_features=["node::梯度下降", "seg::梯度下降"],
+            ),
+            SparseSample(
+                label=0.0,
+                numeric_features={"overlap_ratio": 0.0, "rule_score": 0.12},
+                token_features=["node::梯度下降", "seg::音乐"],
+            ),
+        ]
+        model.fit(samples, epochs=8, lr=0.1)
+        model.save(model_path)
+
+        ranker = EvidenceRanker(model_path=model_path)
+        assert ranker.is_enabled is True
+        assert ranker.disabled_reason is None
+        assert ranker.load_error is None
+
+        result = ranker.score_record({
+            "label": 1,
+            "rule_score": 0.62,
+            "numeric_features": {"overlap_ratio": 0.9, "rule_score": 0.62},
+            "token_features": ["node::梯度下降", "seg::梯度下降"],
+        })
+        assert result.used_model is True
+        assert result.relevance_score >= 0.62
+        print("PASS test_evidence_ranker_loads_saved_model")
+    finally:
+        os.unlink(model_path)
+
+
+def test_evidence_ranker_penalizes_generic_basic_segments():
+    """泛主题节点 + basic 片段不应轻易作为高置信证据"""
+    from app.models import KnowledgeNode, NodeSegmentLink, Segment, VideoCache
+    from app.services.evidence_ranker import EvidenceRanker
+
+    node = KnowledgeNode(
+        id=1,
+        name="机器学习",
+        node_type="topic",
+        aliases=["ML"],
+        definition="一种让模型从数据中学习规律的方法",
+        confidence=0.9,
+        source_count=5,
+    )
+    link = NodeSegmentLink(node_id=1, segment_id=1, relation="mentions", confidence=0.62)
+    segment = Segment(
+        id=1,
+        video_bvid="BV1",
+        segment_index=0,
+        raw_text="视频标题：AI 学习路线与经验分享。视频简介：介绍学习规划和一些建议。",
+        cleaned_text="视频标题：AI 学习路线与经验分享。视频简介：介绍学习规划和一些建议。",
+        source_type="basic",
+        confidence=0.3,
+        knowledge_density=0.05,
+        is_peak=False,
+    )
+    video = VideoCache(bvid="BV1", title="AI 学习路线与经验分享")
+
+    ranker = EvidenceRanker(model_path="/tmp/nonexistent-evidence-model.json")
+    result = ranker.score(node, link, segment, video)
+
+    assert result["confidence_level"] == "low"
+    assert result["is_relevant"] is False
+    print("PASS test_evidence_ranker_penalizes_generic_basic_segments")
+
+
+def test_evidence_ranker_keeps_exact_subtitle_match():
+    """准确命中节点名的字幕片段应保留为相关证据"""
+    from app.models import KnowledgeNode, NodeSegmentLink, Segment, VideoCache
+    from app.services.evidence_ranker import EvidenceRanker
+
+    node = KnowledgeNode(
+        id=2,
+        name="梯度下降",
+        node_type="method",
+        aliases=["Gradient Descent", "GD"],
+        definition="沿负梯度方向迭代优化目标函数",
+        confidence=0.88,
+        source_count=4,
+    )
+    link = NodeSegmentLink(node_id=2, segment_id=2, relation="explains", confidence=0.74)
+    segment = Segment(
+        id=2,
+        video_bvid="BV2",
+        segment_index=3,
+        raw_text="梯度下降的核心思想是沿着损失函数的负梯度方向更新参数，从而逐步逼近最优解。",
+        cleaned_text="梯度下降的核心思想是沿着损失函数的负梯度方向更新参数，从而逐步逼近最优解。",
+        source_type="subtitle",
+        confidence=1.0,
+        knowledge_density=0.72,
+        is_peak=True,
+    )
+    video = VideoCache(bvid="BV2", title="机器学习基础：梯度下降详解")
+
+    ranker = EvidenceRanker(model_path="/tmp/nonexistent-evidence-model.json")
+    result = ranker.score(node, link, segment, video)
+
+    assert result["confidence_level"] in {"medium", "high"}
+    assert result["is_relevant"] is True
+    print("PASS test_evidence_ranker_keeps_exact_subtitle_match")
+
+
+def test_learning_path_router_accepts_session_id():
+    """学习路径接口必须显式接收 session_id，避免前端传参被静默忽略"""
+    import inspect
+    from app.routers import learning_path
+
+    assert "session_id" in inspect.signature(learning_path.search_target_topics).parameters
+    assert "session_id" in inspect.signature(learning_path.generate_learning_path).parameters
+    assert "session_id" in inspect.signature(learning_path.get_popular_topics).parameters
+    print("PASS test_learning_path_router_accepts_session_id")
+
+
+def test_path_recommender_scores_and_roles():
+    from app.services.graph_store import GraphStore
+    from app.services.path_recommender import PathRecommender
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
+        graph_path = handle.name
+
+    try:
+        gs = GraphStore(graph_path=graph_path)
+        gs.add_node(1, node_type="concept", name="线性代数基础", difficulty=1, confidence=0.82, source_count=4)
+        gs.add_node(2, node_type="concept", name="梯度下降", difficulty=2, confidence=0.88, source_count=5)
+        gs.add_node(3, node_type="topic", name="机器学习", difficulty=3, confidence=0.9, source_count=6)
+        gs.add_edge(1, 2, relation_type="prerequisite_of", confidence=0.9)
+        gs.add_edge(2, 3, relation_type="prerequisite_of", confidence=0.9)
+
+        recommender = PathRecommender(gs)
+        result = recommender.recommend_path(3, mode="beginner")
+
+        assert result["summary"]["mode_label"] == "入门路径"
+        assert result["summary"]["direct_prerequisites"] == 1
+        assert len(result["steps"]) == 3
+
+        step_names = [step["name"] for step in result["steps"]]
+        assert step_names == ["线性代数基础", "梯度下降", "机器学习"]
+
+        foundation_step = result["steps"][0]
+        direct_step = result["steps"][1]
+        target_step = result["steps"][2]
+
+        assert foundation_step["dependency_role"] == "foundation"
+        assert direct_step["dependency_role"] == "direct_prerequisite"
+        assert target_step["dependency_role"] == "target"
+        assert direct_step["priority_score"] > 0
+        assert "直接前置" in direct_step["reason_tags"]
+        assert target_step["dependency_depth"] == 0
+        print("PASS test_path_recommender_scores_and_roles")
+    finally:
+        os.unlink(graph_path)
 
 
 if __name__ == "__main__":
@@ -639,6 +994,18 @@ if __name__ == "__main__":
         test_extractor_difficulty,
         test_learning_path_router_import,
         test_all_routes_registered,
+        test_video_organizer_classification,
+        test_video_organizer_series_detection,
+        test_video_organizer_duplicate_detection,
+        test_lightweight_binary_model,
+        test_lightweight_multiclass_model,
+        test_evidence_ranker_metrics,
+        test_evidence_ranker_score_record_prefers_precomputed_features,
+        test_evidence_ranker_loads_saved_model,
+        test_evidence_ranker_penalizes_generic_basic_segments,
+        test_evidence_ranker_keeps_exact_subtitle_match,
+        test_learning_path_router_accepts_session_id,
+        test_path_recommender_scores_and_roles,
     ]
 
     passed = 0

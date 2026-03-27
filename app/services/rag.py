@@ -142,7 +142,7 @@ class RAGService:
             ("human", "{content}")
         ])
     
-    def add_video_content(self, video: VideoContent) -> int:
+    def add_video_content(self, video: VideoContent, session_id: Optional[str] = None) -> int:
         """
         添加单个视频内容到向量库
 
@@ -154,7 +154,7 @@ class RAGService:
         """
         # 构建完整内容（正文不带标题，避免标题相似度主导召回）
         title = video.title or "未知标题"
-        session_id = getattr(video, 'session_id', None) or ""
+        effective_session_id = session_id or getattr(video, "session_id", None) or ""
         content_parts: List[str] = []
         
         if video.content and video.content.strip():
@@ -204,7 +204,7 @@ class RAGService:
                     "source": video.source.value,
                     "chunk_index": i,
                     "url": f"https://www.bilibili.com/video/{video.bvid}",
-                    "session_id": session_id,
+                    "session_id": effective_session_id,
                 }
             )
             documents.append(doc)
@@ -221,7 +221,7 @@ class RAGService:
         
         return len(documents)
     
-    def add_videos_batch(self, videos: List[VideoContent], progress_callback=None) -> dict:
+    def add_videos_batch(self, videos: List[VideoContent], progress_callback=None, session_id: Optional[str] = None) -> dict:
         """
         批量添加视频到向量库
         
@@ -238,7 +238,7 @@ class RAGService:
         
         for i, video in enumerate(videos):
             try:
-                chunks = self.add_video_content(video)
+                chunks = self.add_video_content(video, session_id=session_id)
                 total_chunks += chunks
                 success += 1
                 
@@ -404,7 +404,7 @@ class RAGService:
             }
         """
         # 先检查向量库是否有内容
-        stats = self.get_collection_stats()
+        stats = self.get_collection_stats(session_id=session_id)
         if stats["total_chunks"] == 0:
             # 知识库为空时，使用 fallback 让 AI 自然回复
             return await self._fallback_answer(question, "知识库目前还没有内容")
@@ -503,24 +503,31 @@ class RAGService:
         
         return await chain.ainvoke(content)
     
-    def get_collection_stats(self) -> dict:
-        """
-        获取向量库统计信息
-        
-        Returns:
-            统计信息字典
-        """
+    def get_collection_stats(self, session_id: Optional[str] = None) -> dict:
+        """获取向量库统计信息"""
         try:
             collection = self.vectorstore._collection
-            count = collection.count()
-            
-            # 获取唯一视频数
-            result = collection.get(include=["metadatas"])
+            if session_id:
+                result = collection.get(where={"session_id": session_id}, include=["metadatas"])
+                metadatas = result.get("metadatas", []) if result else []
+                count = len(metadatas)
+            else:
+                count = collection.count()
+
+            # 获取唯一视频数（兼容不同 ChromaDB 版本）
             bvids = set()
-            for meta in result.get("metadatas", []):
-                if meta and "bvid" in meta:
-                    bvids.add(meta["bvid"])
-            
+            try:
+                if session_id:
+                    result = collection.get(where={"session_id": session_id}, include=["metadatas"])
+                else:
+                    result = collection.get(include=["metadatas"])
+                for meta in (result or {}).get("metadatas", []):
+                    if meta and "bvid" in meta:
+                        bvids.add(meta["bvid"])
+            except Exception:
+                # ChromaDB 版本兼容：如果 get() 失败，只返回 count
+                pass
+
             return {
                 "total_chunks": count,
                 "total_videos": len(bvids),
@@ -533,17 +540,18 @@ class RAGService:
                 "total_videos": 0,
                 "collection_name": self.collection_name
             }
-    
-    def clear_collection(self):
+
+    def clear_collection(self, session_id: Optional[str] = None):
         """清空向量库"""
         try:
-            self.vectorstore._collection.delete(where={})
-            logger.info(f"已清空向量库: {self.collection_name}")
+            where = {"session_id": session_id} if session_id else {}
+            self.vectorstore._collection.delete(where=where)
+            logger.info(f"已清空向量库: {self.collection_name}, session={session_id or 'ALL'}")
         except Exception as e:
             logger.error(f"清空向量库失败: {e}")
             raise
     
-    def delete_video(self, bvid: str):
+    def delete_video(self, bvid: str, session_id: Optional[str] = None):
         """
         删除指定视频的所有文档块
         
@@ -551,8 +559,12 @@ class RAGService:
             bvid: 视频 BV 号
         """
         try:
-            self.vectorstore._collection.delete(where={"bvid": bvid})
-            logger.info(f"已删除视频: {bvid}")
+            if session_id:
+                where = {"$and": [{"bvid": bvid}, {"session_id": session_id}]}
+            else:
+                where = {"bvid": bvid}
+            self.vectorstore._collection.delete(where=where)
+            logger.info(f"已删除视频: {bvid}, session={session_id or 'ALL'}")
         except Exception as e:
             logger.error(f"删除视频失败 [{bvid}]: {e}")
             raise
