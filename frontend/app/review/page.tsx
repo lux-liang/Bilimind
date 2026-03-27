@@ -3,8 +3,10 @@
 import { useState, useEffect, useCallback } from "react";
 import NavSidebar from "@/components/NavSidebar";
 import UserTopbar from "@/components/UserTopbar";
+import { API_BASE_URL } from "@/lib/api";
+import { useAuthSession } from "@/lib/session";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API = API_BASE_URL;
 
 interface DueItem {
   node_id: number;
@@ -49,7 +51,7 @@ const QUALITY_BUTTONS = [
 ];
 
 export default function ReviewPage() {
-  const [session, setSession] = useState<string | null>(null);
+  const { sessionId: session, scopeKey } = useAuthSession();
   const [items, setItems] = useState<DueItem[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [result, setResult] = useState<ReviewResult | null>(null);
@@ -58,9 +60,11 @@ export default function ReviewPage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    const s = localStorage.getItem("bili_session");
-    if (s) setSession(s);
-  }, []);
+    setItems([]);
+    setCurrentIndex(0);
+    setResult(null);
+    setStats({ total_tracked: 0, due_today: 0, mastered: 0, avg_retention: 0 });
+  }, [scopeKey]);
 
   const fetchDue = useCallback(async () => {
     if (!session) return;

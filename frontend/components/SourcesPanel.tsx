@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   FavoriteFolder,
   Video,
@@ -11,6 +11,7 @@ import {
   OrganizePreviewResponse,
 } from "@/lib/api";
 import OrganizePreviewModal from "@/components/OrganizePreviewModal";
+import { isActiveSession, writeKnowledgeBuildTask } from "@/lib/session";
 
 interface Props {
   sessionId: string;
@@ -30,23 +31,53 @@ export default function SourcesPanel({ sessionId, onBuildDone, onSelectionChange
   const [organizeLoading, setOrganizeLoading] = useState(false);
   const [organizePreview, setOrganizePreview] = useState<OrganizePreviewResponse | null>(null);
   const [organizeMessage, setOrganizeMessage] = useState<string | null>(null);
+  const loadRequestIdRef = useRef(0);
+  const buildPollIdRef = useRef(0);
+
+  useEffect(() => {
+    setFolders([]);
+    setSelected(new Set());
+    setLoading(true);
+    setBuilding(false);
+    setProgress(null);
+    setStatusMap({});
+    setMessage(null);
+    setOrganizeOpen(false);
+    setOrganizeLoading(false);
+    setOrganizePreview(null);
+    setOrganizeMessage(null);
+  }, [sessionId]);
 
   // 加载收藏夹列表（从B站获取）
   const loadFolders = async () => {
+    const requestId = ++loadRequestIdRef.current;
+    const activeSessionId = sessionId;
     setLoading(true);
     try {
       const data = await favoritesApi.getList(sessionId);
-      setFolders(data.map((f) => ({ ...f, count_source: "bili" })));
+      if (loadRequestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+        setFolders(data.map((f) => ({ ...f, count_source: "bili" })));
+      }
     } catch (e) {
-      console.error(e);
+      if (loadRequestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+        console.error(e);
+        setFolders([]);
+      }
     }
-    setLoading(false);
+    if (loadRequestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+      setLoading(false);
+    }
   };
 
   // 加载入库状态（从本地数据库）
   const loadStatuses = async () => {
+    const requestId = loadRequestIdRef.current;
+    const activeSessionId = sessionId;
     try {
       const data = await knowledgeApi.getFolderStatus(sessionId);
+      if (loadRequestIdRef.current !== requestId || !isActiveSession(activeSessionId)) {
+        return;
+      }
       const map: Record<number, FolderStatus> = {};
       data.forEach((item) => {
         map[item.media_id] = item;
@@ -77,22 +108,30 @@ export default function SourcesPanel({ sessionId, onBuildDone, onSelectionChange
   };
 
   const openOrganizePreview = async (folderId: number) => {
+    const activeSessionId = sessionId;
     setOrganizeMessage(null);
     setOrganizePreview(null);
     setOrganizeOpen(true);
     setOrganizeLoading(true);
     try {
       const res = await favoritesApi.organizePreview(folderId, sessionId);
-      setOrganizePreview(res);
+      if (isActiveSession(activeSessionId)) {
+        setOrganizePreview(res);
+      }
     } catch (e) {
-      setOrganizeMessage("预览失败，请稍后重试");
+      if (isActiveSession(activeSessionId)) {
+        setOrganizeMessage("预览失败，请稍后重试");
+      }
     } finally {
-      setOrganizeLoading(false);
+      if (isActiveSession(activeSessionId)) {
+        setOrganizeLoading(false);
+      }
     }
   };
 
   // 展开收藏夹查看视频
   const toggleExpand = async (id: number) => {
+    const activeSessionId = sessionId;
     setFolders((prev) =>
       prev.map((f) => {
         if (f.media_id !== id) return f;
@@ -106,12 +145,18 @@ export default function SourcesPanel({ sessionId, onBuildDone, onSelectionChange
     if (!folder?.videos) {
       try {
         const res = await favoritesApi.getAllVideos(id, sessionId);
+        if (!isActiveSession(activeSessionId)) {
+          return;
+        }
         setFolders((prev) =>
           prev.map((f) =>
             f.media_id === id ? { ...f, videos: res.videos, loading: false, media_count: res.total, count_source: "filtered" } : f
           )
         );
       } catch {
+        if (!isActiveSession(activeSessionId)) {
+          return;
+        }
         setFolders((prev) =>
           prev.map((f) => (f.media_id === id ? { ...f, loading: false } : f))
         );
@@ -136,10 +181,31 @@ export default function SourcesPanel({ sessionId, onBuildDone, onSelectionChange
 
     try {
       const res = await knowledgeApi.build({ folder_ids: Array.from(selected) }, sessionId);
+      writeKnowledgeBuildTask(sessionId, {
+        taskId: res.task_id,
+        status: "pending",
+        message: res.message,
+        progress: 0,
+        currentStep: "准备构建知识图谱",
+        updatedAt: Date.now(),
+      });
+      const pollId = ++buildPollIdRef.current;
+      const activeSessionId = sessionId;
 
       const poll = async () => {
-        const s = await knowledgeApi.getBuildStatus(res.task_id);
+        const s = await knowledgeApi.getBuildStatus(res.task_id, activeSessionId);
+        if (buildPollIdRef.current !== pollId || !isActiveSession(activeSessionId)) {
+          return;
+        }
         setProgress(s);
+        writeKnowledgeBuildTask(activeSessionId, {
+          taskId: s.task_id,
+          status: s.status,
+          message: s.message,
+          progress: s.progress,
+          currentStep: s.current_step,
+          updatedAt: Date.now(),
+        });
 
         if (s.status === "running" || s.status === "pending") {
           setTimeout(poll, 1000);
@@ -158,6 +224,14 @@ export default function SourcesPanel({ sessionId, onBuildDone, onSelectionChange
     } catch (e) {
       setBuilding(false);
       setMessage("构建失败，请重试");
+      writeKnowledgeBuildTask(sessionId, {
+        taskId: "",
+        status: "failed",
+        message: "构建失败，请重试",
+        progress: 0,
+        currentStep: null,
+        updatedAt: Date.now(),
+      });
     }
   };
 

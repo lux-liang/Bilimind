@@ -1,29 +1,57 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { treeApi, NodeDetail, LearningPathResponse } from "@/lib/api";
 import NavSidebar from "@/components/NavSidebar";
+import UserTopbar from "@/components/UserTopbar";
+import { isActiveSession, useAuthSession } from "@/lib/session";
 
 export default function NodeDetailPage() {
   const params = useParams();
   const nodeId = Number(params.id);
+  const { sessionId, scopeKey } = useAuthSession();
   const [detail, setDetail] = useState<NodeDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [path, setPath] = useState<LearningPathResponse | null>(null);
   const [pathMode, setPathMode] = useState<"beginner" | "standard" | "quick">("standard");
   const [pathLoading, setPathLoading] = useState(false);
+  const detailRequestIdRef = useRef(0);
+  const pathRequestIdRef = useRef(0);
 
   useEffect(() => {
-    if (!nodeId) return;
-    treeApi.getNodeDetail(nodeId)
-      .then(setDetail)
-      .catch((e) => console.error("Failed to load node:", e))
-      .finally(() => setLoading(false));
-  }, [nodeId]);
+    setDetail(null);
+    setPath(null);
+    setPathLoading(false);
+    setLoading(!!sessionId && !!nodeId);
+    if (!nodeId || !sessionId) {
+      setLoading(false);
+      return;
+    }
+    const requestId = ++detailRequestIdRef.current;
+    const activeSessionId = sessionId;
+    treeApi.getNodeDetail(nodeId, sessionId)
+      .then((data) => {
+        if (detailRequestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+          setDetail(data);
+        }
+      })
+      .catch((e) => {
+        if (detailRequestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+          console.error("Failed to load node:", e);
+          setDetail(null);
+        }
+      })
+      .finally(() => {
+        if (detailRequestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+          setLoading(false);
+        }
+      });
+  }, [nodeId, sessionId, scopeKey]);
 
   if (loading) return <div className="loading-state">Loading...</div>;
+  if (!sessionId) return <div className="loading-state">Please log in first.</div>;
   if (!detail) return <div className="loading-state">Node not found.</div>;
 
   const stars = Array.from({ length: detail.difficulty }, () => "\u25CF").join("");
@@ -33,6 +61,9 @@ export default function NodeDetailPage() {
       <header className="app-topbar">
         <div className="brand">
           <span className="brand-title">BiliMind</span>
+        </div>
+        <div className="topbar-actions">
+          <UserTopbar />
         </div>
       </header>
       <main className="app-main">
@@ -164,11 +195,26 @@ export default function NodeDetailPage() {
                     style={{ fontSize: 13, padding: "6px 12px" }}
                     onClick={() => {
                       setPathMode(m);
+                      setPath(null);
                       setPathLoading(true);
+                      const requestId = ++pathRequestIdRef.current;
+                      const activeSessionId = sessionId;
                       treeApi.getLearningPath(nodeId, m)
-                        .then(setPath)
-                        .catch(() => {})
-                        .finally(() => setPathLoading(false));
+                        .then((data) => {
+                          if (pathRequestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+                            setPath(data);
+                          }
+                        })
+                        .catch(() => {
+                          if (pathRequestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+                            setPath(null);
+                          }
+                        })
+                        .finally(() => {
+                          if (pathRequestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+                            setPathLoading(false);
+                          }
+                        });
                     }}
                   >
                     {m === "beginner" ? "Beginner" : m === "standard" ? "Standard" : "Quick Review"}

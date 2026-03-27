@@ -1,17 +1,28 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import NavSidebar from "@/components/NavSidebar";
 import KnowledgeTree from "@/components/KnowledgeTree";
 import KnowledgeGraph3D from "@/components/KnowledgeGraph3D";
 import ImportUrlModal from "@/components/ImportUrlModal";
 import AIAssistant from "@/components/AIAssistant";
-import { treeApi, TreeStats, NodeDetail } from "@/lib/api";
+import { treeApi, TreeStats, NodeDetail, knowledgeApi, BuildStatus } from "@/lib/api";
+import {
+  isActiveSession,
+  useAuthSession,
+  readKnowledgeBuildTask,
+  writeKnowledgeBuildTask,
+  KnowledgeBuildTaskSnapshot,
+} from "@/lib/session";
 import UserTopbar from "@/components/UserTopbar";
 import Link from "next/link";
 
+type TreePageStatus = "login" | "loading" | "building" | "failed" | "empty" | "ready";
+
 export default function TreePage() {
+  const { sessionId, scopeKey } = useAuthSession();
   const [stats, setStats] = useState<TreeStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [nodeDetail, setNodeDetail] = useState<NodeDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -20,10 +31,127 @@ export default function TreePage() {
   const [treeKey, setTreeKey] = useState(0);
   const [viewMode, setViewMode] = useState<"tree" | "graph3d">("tree");
   const [colorMode, setColorMode] = useState<"type" | "community">("type");
+  const [buildTask, setBuildTask] = useState<KnowledgeBuildTaskSnapshot | null>(null);
+  const detailRequestId = useRef(0);
+  const statsRequestId = useRef(0);
+  const buildPollId = useRef(0);
+
+  const refreshStats = useCallback((activeSessionId?: string | null) => {
+    const sid = activeSessionId ?? sessionId;
+    if (!sid) {
+      setStats(null);
+      setStatsLoading(false);
+      return;
+    }
+    const requestId = ++statsRequestId.current;
+    setStatsLoading(true);
+    treeApi.getStats(sid)
+      .then((data) => {
+        if (statsRequestId.current === requestId && isActiveSession(sid)) {
+          setStats(data);
+        }
+      })
+      .catch(() => {
+        if (statsRequestId.current === requestId && isActiveSession(sid)) {
+          setStats(null);
+        }
+      })
+      .finally(() => {
+        if (statsRequestId.current === requestId && isActiveSession(sid)) {
+          setStatsLoading(false);
+        }
+      });
+  }, [sessionId]);
 
   useEffect(() => {
-    treeApi.getStats().then(setStats).catch(() => {});
-  }, []);
+    setStats(null);
+    setStatsLoading(false);
+    setSelectedNodeId(null);
+    setNodeDetail(null);
+    setDetailLoading(false);
+    setBuildTask(readKnowledgeBuildTask(sessionId));
+    setTreeKey((k) => k + 1);
+
+    if (!sessionId) {
+      return;
+    }
+    refreshStats(sessionId);
+  }, [sessionId, scopeKey, refreshStats]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      setBuildTask(null);
+      return;
+    }
+
+    const syncTask = () => setBuildTask(readKnowledgeBuildTask(sessionId));
+    syncTask();
+    window.addEventListener("storage", syncTask);
+    window.addEventListener("bilimind:build-task-change", syncTask);
+    return () => {
+      window.removeEventListener("storage", syncTask);
+      window.removeEventListener("bilimind:build-task-change", syncTask);
+    };
+  }, [sessionId, scopeKey]);
+
+  useEffect(() => {
+    if (!sessionId || !buildTask || !buildTask.taskId) {
+      return;
+    }
+    if (buildTask.status !== "pending" && buildTask.status !== "running") {
+      return;
+    }
+
+    const pollId = ++buildPollId.current;
+    const activeSessionId = sessionId;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const status: BuildStatus = await knowledgeApi.getBuildStatus(buildTask.taskId, activeSessionId);
+        if (cancelled || buildPollId.current !== pollId || !isActiveSession(activeSessionId)) {
+          return;
+        }
+        const snapshot: KnowledgeBuildTaskSnapshot = {
+          taskId: status.task_id,
+          status: status.status,
+          message: status.message,
+          progress: status.progress,
+          currentStep: status.current_step,
+          updatedAt: Date.now(),
+        };
+        writeKnowledgeBuildTask(activeSessionId, snapshot);
+        setBuildTask(snapshot);
+
+        if (status.status === "pending" || status.status === "running") {
+          setTimeout(poll, 1200);
+          return;
+        }
+
+        refreshStats(activeSessionId);
+        setTreeKey((k) => k + 1);
+      } catch {
+        if (cancelled || buildPollId.current !== pollId || !isActiveSession(activeSessionId)) {
+          return;
+        }
+        const failedTask: KnowledgeBuildTaskSnapshot = {
+          taskId: buildTask.taskId,
+          status: "failed",
+          message: "构建状态获取失败，请稍后重试",
+          progress: buildTask.progress,
+          currentStep: buildTask.currentStep,
+          updatedAt: Date.now(),
+        };
+        writeKnowledgeBuildTask(activeSessionId, failedTask);
+        setBuildTask(failedTask);
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, buildTask?.taskId, buildTask?.status, refreshStats]);
 
   const handleNodeSelect = useCallback((nodeId: number) => {
     setSelectedNodeId(nodeId);
@@ -31,13 +159,83 @@ export default function TreePage() {
       setNodeDetail(null);
       return;
     }
+    if (!sessionId) {
+      setNodeDetail(null);
+      return;
+    }
+    const requestId = ++detailRequestId.current;
+    const activeSessionId = sessionId;
     setDetailLoading(true);
     treeApi
       .getNodeDetail(nodeId)
-      .then(setNodeDetail)
+      .then((detail) => {
+        if (detailRequestId.current === requestId && isActiveSession(activeSessionId)) {
+          setNodeDetail(detail);
+        }
+      })
       .catch(() => setNodeDetail(null))
-      .finally(() => setDetailLoading(false));
-  }, []);
+      .finally(() => {
+        if (detailRequestId.current === requestId && isActiveSession(activeSessionId)) {
+          setDetailLoading(false);
+        }
+      });
+  }, [sessionId]);
+
+  const hasTreeData = (stats?.total_nodes || 0) > 0;
+  let pageStatus: TreePageStatus = "login";
+  if (sessionId) {
+    if (statsLoading && !stats) {
+      pageStatus = "loading";
+    } else if (hasTreeData) {
+      pageStatus = "ready";
+    } else if (buildTask?.status === "pending" || buildTask?.status === "running") {
+      pageStatus = "building";
+    } else if (buildTask?.status === "failed") {
+      pageStatus = "failed";
+    } else {
+      pageStatus = "empty";
+    }
+  }
+
+  const treeStateCard = (() => {
+    if (pageStatus === "loading") {
+      return <div className="loading-state">正在加载当前账号的知识树状态...</div>;
+    }
+    if (pageStatus === "login") {
+      return (
+        <div className="tree-empty">
+          <p>当前未登录</p>
+          <p>请先扫码登录，再查看当前账号的知识树。</p>
+          <p><Link href="/">回到首页登录</Link></p>
+        </div>
+      );
+    }
+    if (pageStatus === "building") {
+      return (
+        <div className="tree-empty">
+          <p>当前账号正在构建知识图谱</p>
+          <p>{buildTask?.currentStep || "正在抽取知识点和构建知识树，请稍候。"}</p>
+          <p>进度 {Math.round(buildTask?.progress || 0)}%</p>
+        </div>
+      );
+    }
+    if (pageStatus === "failed") {
+      return (
+        <div className="tree-empty">
+          <p>当前账号的知识树构建失败</p>
+          <p>{buildTask?.message || "请回到来源面板重新发起构建。"}</p>
+          <p><Link href="/">回到首页继续处理</Link></p>
+        </div>
+      );
+    }
+    return (
+      <div className="tree-empty">
+        <p>当前账号暂无知识树</p>
+        <p>请先选择收藏夹并开始构建；在数据准备好前，不会展示旧账号内容。</p>
+        <p><Link href="/">回到首页开始构建</Link></p>
+      </div>
+    );
+  })();
 
   return (
     <div className="app-shell">
@@ -114,22 +312,50 @@ export default function TreePage() {
                   </button>
                 </div>
               </div>
-              {!treeCollapsed && viewMode === "tree" && (
-                <KnowledgeTree key={treeKey} onNodeSelect={handleNodeSelect} selectedNodeId={selectedNodeId} />
+              {!treeCollapsed && viewMode === "tree" && pageStatus === "ready" && (
+                <KnowledgeTree
+                  key={`${scopeKey}-${treeKey}`}
+                  sessionId={sessionId}
+                  onNodeSelect={handleNodeSelect}
+                  selectedNodeId={selectedNodeId}
+                />
               )}
-              {!treeCollapsed && viewMode === "graph3d" && (
+              {!treeCollapsed && viewMode === "graph3d" && pageStatus === "ready" && (
                 <KnowledgeGraph3D
-                  key={treeKey}
+                  key={`${scopeKey}-${treeKey}`}
+                  sessionId={sessionId}
                   onNodeSelect={handleNodeSelect}
                   selectedNodeId={selectedNodeId}
                   colorMode={colorMode}
                 />
               )}
+              {!treeCollapsed && pageStatus !== "ready" && treeStateCard}
             </div>
 
             {/* 中：节点工作台 */}
             <div className="tree-panel-center">
-              {detailLoading ? (
+              {pageStatus !== "ready" ? (
+                <div className="center-placeholder">
+                  <div className="placeholder-illustration">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" strokeWidth="1.2">
+                      <circle cx="12" cy="8" r="3" />
+                      <circle cx="6" cy="18" r="2.5" />
+                      <circle cx="18" cy="18" r="2.5" />
+                      <path d="M12 11v3M8.5 16l2-2M15.5 16l-2-2" />
+                    </svg>
+                  </div>
+                  <h3 className="placeholder-title">
+                    {pageStatus === "building" ? "正在为当前账号构建知识树" : "当前账号暂时没有可浏览的知识树"}
+                  </h3>
+                  <p className="placeholder-desc">
+                    {pageStatus === "building"
+                      ? (buildTask?.currentStep || "正在抽取知识点、建立节点关系并整理视频证据。")
+                      : pageStatus === "failed"
+                        ? (buildTask?.message || "构建未成功，请重新发起构建。")
+                        : "在当前账号数据准备好之前，这里不会展示任何旧账号内容。"}
+                  </p>
+                </div>
+              ) : detailLoading ? (
                 <div className="center-placeholder">
                   <div className="placeholder-spinner" />
                   <span>加载中...</span>
@@ -275,7 +501,15 @@ export default function TreePage() {
                 )}
               </div>
               <div className="evidence-body">
-                {nodeDetail && nodeDetail.videos.length > 0 ? (
+                {pageStatus !== "ready" ? (
+                  <div className="evidence-empty">
+                    <p>
+                      {pageStatus === "building"
+                        ? "知识树构建中，视频证据将在当前账号的数据准备好后显示"
+                        : "当前账号暂无可展示的视频证据"}
+                    </p>
+                  </div>
+                ) : nodeDetail && nodeDetail.videos.length > 0 ? (
                   <div className="evidence-list">
                     {nodeDetail.videos.map((v, vi) => (
                       <div key={v.bvid} className={`evidence-card ${vi === 0 ? "evidence-primary" : ""}`}>
@@ -284,6 +518,12 @@ export default function TreePage() {
                           <Link href={`/video/${v.bvid}`}>{v.title}</Link>
                         </h5>
                         {v.owner_name && <span className="evidence-owner">UP: {v.owner_name}</span>}
+                        <div className="evidence-meta" style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <span className="status-pill ok">匹配分 {Math.round((v.evidence_score || 0) * 100)}%</span>
+                          {v.segments?.[0]?.confidence_level === "medium" && (
+                            <span className="status-pill pending">中置信</span>
+                          )}
+                        </div>
                         {v.segments && v.segments.length > 0 && (
                           <div className="evidence-segments">
                             <div className="evidence-seg-label">可跳转片段：</div>
@@ -294,12 +534,17 @@ export default function TreePage() {
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="evidence-jump"
-                                title={seg.text ? seg.text.slice(0, 100) : undefined}
+                                title={seg.match_reason ? `${seg.match_reason} · ${seg.text?.slice(0, 100) || ""}` : seg.text ? seg.text.slice(0, 100) : undefined}
                               >
                                 <span className="jump-play">▶</span>
                                 <span className="jump-time">{seg.time_label}</span>
                               </a>
                             ))}
+                          </div>
+                        )}
+                        {v.segments?.[0]?.match_reason && (
+                          <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 6 }}>
+                            {v.segments[0].match_reason}
                           </div>
                         )}
                         {v.segments && v.segments[0]?.text && (
@@ -310,7 +555,7 @@ export default function TreePage() {
                   </div>
                 ) : nodeDetail ? (
                   <div className="evidence-empty">
-                    <p>该知识点暂无关联视频证据</p>
+                    <p>暂无高置信视频证据</p>
                   </div>
                 ) : (
                   <div className="evidence-empty">
@@ -332,7 +577,7 @@ export default function TreePage() {
         onClose={() => setImportModalOpen(false)}
         onSuccess={() => {
           setTreeKey((k) => k + 1);
-          treeApi.getStats().then(setStats).catch(() => {});
+          refreshStats(sessionId);
         }}
       />
       <AIAssistant />

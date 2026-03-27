@@ -6,9 +6,10 @@ import UserTopbar from "@/components/UserTopbar";
 import SourcesPanel from "@/components/SourcesPanel";
 import ChatPanel from "@/components/ChatPanel";
 import AIAssistant from "@/components/AIAssistant";
+import { useAuthSession } from "@/lib/session";
 
 export default function ChatPage() {
-  const [session, setSession] = useState<string | null>(null);
+  const { sessionId: session, scopeKey } = useAuthSession();
   const [statsKey, setStatsKey] = useState(0);
   const [selectedFolderIds, setSelectedFolderIds] = useState<number[]>([]);
   const [leftWidth, setLeftWidth] = useState(280);
@@ -16,9 +17,9 @@ export default function ChatPage() {
   const containerRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    const s = localStorage.getItem("bili_session");
-    if (s) setSession(s);
-  }, []);
+    setStatsKey(0);
+    setSelectedFolderIds([]);
+  }, [scopeKey]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { treeApi, TreeNode, TreeResponse } from "@/lib/api";
+import { isActiveSession } from "@/lib/session";
 
 interface TreeNodeItemProps {
   node: TreeNode;
@@ -81,35 +82,69 @@ function TreeNodeItem({ node, searchTerm, difficultyFilter, onNodeSelect, select
 }
 
 interface KnowledgeTreeProps {
+  sessionId?: string | null;
   onNodeSelect?: (nodeId: number) => void;
   selectedNodeId?: number | null;
 }
 
-export default function KnowledgeTree({ onNodeSelect, selectedNodeId }: KnowledgeTreeProps) {
+export default function KnowledgeTree({ sessionId, onNodeSelect, selectedNodeId }: KnowledgeTreeProps) {
   const [data, setData] = useState<TreeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [difficultyFilter, setDifficultyFilter] = useState(0);
   const [stageFilter, setStageFilter] = useState("");
   const [topicFilter, setTopicFilter] = useState<number | undefined>(undefined);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
+    setData(null);
+    setSearchTerm("");
+    setDifficultyFilter(0);
+    setStageFilter("");
+    setTopicFilter(undefined);
+    setLoading(!!sessionId);
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      setData(null);
+      setLoading(false);
+      return;
+    }
+
+    const requestId = ++requestIdRef.current;
+    const activeSessionId = sessionId;
     setLoading(true);
     treeApi.getTree({
+      sessionId,
       stage: stageFilter || undefined,
       topicId: topicFilter,
     })
-      .then(setData)
-      .catch((e) => console.error("Failed to load tree:", e))
-      .finally(() => setLoading(false));
-  }, [stageFilter, topicFilter]);
+      .then((tree) => {
+        if (requestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+          setData(tree);
+        }
+      })
+      .catch((e) => {
+        if (requestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+          console.error("Failed to load tree:", e);
+          setData(null);
+        }
+      })
+      .finally(() => {
+        if (requestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+          setLoading(false);
+        }
+      });
+  }, [sessionId, stageFilter, topicFilter]);
 
   if (loading) return <div className="loading-state">加载知识树中...</div>;
   if (!data || data.tree.length === 0) {
     return (
       <div className="tree-empty">
-        <p>暂无知识树数据</p>
-        <p>请先在 <Link href="/">首页</Link> 登录并构建知识库。</p>
+        <p>当前账号暂无知识树</p>
+        <p>请先选择收藏夹并开始构建，或等待当前账号的构建任务完成。</p>
+        <p><Link href="/">回到首页</Link> 或前往工作区继续处理。</p>
       </div>
     );
   }

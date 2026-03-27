@@ -1,19 +1,6 @@
 import type { Metadata } from "next";
-import { ZCOOL_XiaoWei, Noto_Sans_SC } from "next/font/google";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import "./globals.css";
-
-const display = ZCOOL_XiaoWei({
-  subsets: ["latin"],
-  weight: "400",
-  variable: "--font-display",
-});
-
-const body = Noto_Sans_SC({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  variable: "--font-body",
-});
 
 export const metadata: Metadata = {
   title: "BiliMind — 个人视频知识导航系统",
@@ -30,7 +17,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
-      <body className={`${display.variable} ${body.variable} antialiased`}>
+      <body className="antialiased">
         <ThemeProvider>
           {children}
         </ThemeProvider>

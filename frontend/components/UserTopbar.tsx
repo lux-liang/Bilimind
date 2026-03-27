@@ -1,27 +1,20 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import { authApi } from "@/lib/api";
 import { useTheme } from "@/components/ThemeProvider";
+import { clearAuthSession, useAuthSession } from "@/lib/session";
 
 /**
  * 用户状态栏 — 显示当前登录用户 + 主题切换 + 退出按钮
  * 放在各页面的 topbar-actions 区域中
  */
 export default function UserTopbar() {
-  const [user, setUser] = useState<string | null>(null);
-  const [session, setSession] = useState<string | null>(null);
+  const { userName: user, sessionId: session } = useAuthSession();
   const { theme, toggleTheme } = useTheme();
-
-  useEffect(() => {
-    setUser(localStorage.getItem("bili_user"));
-    setSession(localStorage.getItem("bili_session"));
-  }, []);
 
   const handleLogout = () => {
     if (session) authApi.logout(session).catch(() => {});
-    localStorage.removeItem("bili_session");
-    localStorage.removeItem("bili_user");
+    clearAuthSession();
     window.location.href = "/";
   };
 

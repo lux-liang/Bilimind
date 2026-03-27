@@ -13,6 +13,7 @@ import {
   LearningPathStep,
   PopularTopic,
 } from "@/lib/api";
+import { useAuthSession } from "@/lib/session";
 
 export default function LearningPathPage() {
   return (
@@ -25,6 +26,7 @@ export default function LearningPathPage() {
 function LearningPathContent() {
   const searchParams = useSearchParams();
   const initialTarget = searchParams.get("target") || "";
+  const { sessionId, scopeKey } = useAuthSession();
 
   const [query, setQuery] = useState(initialTarget);
   const [mode, setMode] = useState<"beginner" | "standard" | "quick">("standard");
@@ -41,20 +43,28 @@ function LearningPathContent() {
   }, [path]);
 
   useEffect(() => {
+    setPath(null);
+    setError("");
+    setFocusedStepId(null);
+    setLoading(false);
+    setPopularTopics([]);
+    if (!sessionId) {
+      return;
+    }
     learningPathApi.getPopularTopics(12).then(setPopularTopics).catch(() => {});
-  }, []);
+  }, [sessionId, scopeKey]);
 
   // 如果从知识树页面带了 target 参数，自动生成
   useEffect(() => {
-    if (initialTarget) {
+    if (initialTarget && sessionId) {
       handleGenerate(initialTarget);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [sessionId, scopeKey]);
 
   const handleGenerate = async (target?: string) => {
     const t = (target || query).trim();
-    if (!t) return;
+    if (!t || !sessionId) return;
     setQuery(t);
     setLoading(true);
     setError("");
@@ -97,6 +107,12 @@ function LearningPathContent() {
               <p>输入目标知识点，自动生成从基础到目标的学习路线，每步附带视频证据和可跳转时间片段</p>
             </div>
 
+            {!sessionId && (
+              <div className="tree-empty" style={{ marginBottom: 20 }}>
+                <p>请先登录后生成当前账号的学习路径</p>
+              </div>
+            )}
+
             {/* 输入区 */}
             <div className="path-input-bar">
               <input
@@ -118,7 +134,7 @@ function LearningPathContent() {
                 <option value="standard">标准路径</option>
                 <option value="quick">快速复习</option>
               </select>
-              <button className="btn btn-primary" onClick={() => handleGenerate()} disabled={loading || !query.trim()}>
+              <button className="btn btn-primary" onClick={() => handleGenerate()} disabled={loading || !query.trim() || !sessionId}>
                 {loading ? "生成中..." : "生成路径"}
               </button>
             </div>
@@ -156,6 +172,27 @@ function LearningPathContent() {
                     {path.total_steps} 步 · {path.estimated_videos} 个视频 · {mode === "beginner" ? "入门" : mode === "quick" ? "快速" : "标准"}模式
                   </span>
                 </div>
+
+                {path.summary && (
+                  <div className="path-metrics-grid">
+                    <div className="path-metric-card">
+                      <span className="path-metric-label">路径模式</span>
+                      <strong>{path.summary.mode_label}</strong>
+                    </div>
+                    <div className="path-metric-card">
+                      <span className="path-metric-label">平均路径优先级</span>
+                      <strong>{path.summary.avg_priority_score.toFixed(2)}</strong>
+                    </div>
+                    <div className="path-metric-card">
+                      <span className="path-metric-label">平均证据支撑</span>
+                      <strong>{(path.summary.avg_evidence_score ?? path.summary.avg_support_score).toFixed(2)}</strong>
+                    </div>
+                    <div className="path-metric-card">
+                      <span className="path-metric-label">直接前置节点</span>
+                      <strong>{path.summary.direct_prerequisites}</strong>
+                    </div>
+                  </div>
+                )}
 
                 <div className="path-explanation">
                   该路径从基础概念出发，逐步递进到目标知识点「{path.target.name}」。
@@ -220,6 +257,23 @@ function PathStepCard({ step, isLast, isFocused, onFocus }: { step: LearningPath
         </div>
 
         <p className="path-step-reason">{step.reason}</p>
+
+        <div className="path-step-metrics">
+          <span className="node-meta">路径分 {step.composite_score.toFixed(2)}</span>
+          <span className="node-meta">支撑 {step.evidence_score.toFixed(2)}</span>
+          <span className="node-meta">层级 {step.dependency_depth}</span>
+          <span className={`path-support-badge support-${step.support_label}`}>
+            {step.support_label === "strong" ? "证据强" : step.support_label === "medium" ? "证据中" : "证据弱"}
+          </span>
+        </div>
+
+        {step.reason_tags && step.reason_tags.length > 0 && (
+          <div className="path-step-tags">
+            {step.reason_tags.map((tag) => (
+              <span key={tag} className="path-reason-chip">{tag}</span>
+            ))}
+          </div>
+        )}
 
         {step.definition && <p className="path-step-definition">{step.definition}</p>}
 

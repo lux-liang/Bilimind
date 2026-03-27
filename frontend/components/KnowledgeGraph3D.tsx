@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { treeApi, GraphData, GraphNode } from "@/lib/api";
+import { isActiveSession } from "@/lib/session";
 import dynamic from "next/dynamic";
 import * as THREE from "three";
 
@@ -70,6 +71,7 @@ function getGlowTexture(color: string): THREE.Texture {
 // ==================== 组件 ====================
 
 interface KnowledgeGraph3DProps {
+  sessionId?: string | null;
   onNodeSelect?: (nodeId: number) => void;
   selectedNodeId?: number | null;
   topicId?: number;
@@ -78,6 +80,7 @@ interface KnowledgeGraph3DProps {
 }
 
 export default function KnowledgeGraph3D({
+  sessionId,
   onNodeSelect,
   selectedNodeId,
   topicId,
@@ -87,15 +90,37 @@ export default function KnowledgeGraph3D({
   const [data, setData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
   const fgRef = useRef<any>(null);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
+    if (!sessionId) {
+      setData(null);
+      setLoading(false);
+      return;
+    }
+
+    const requestId = ++requestIdRef.current;
+    const activeSessionId = sessionId;
     setLoading(true);
     treeApi
-      .getGraph({ topicId })
-      .then(setData)
-      .catch((e) => console.error("Failed to load graph:", e))
-      .finally(() => setLoading(false));
-  }, [topicId]);
+      .getGraph({ topicId, sessionId })
+      .then((graph) => {
+        if (requestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+          setData(graph);
+        }
+      })
+      .catch((e) => {
+        if (requestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+          console.error("Failed to load graph:", e);
+          setData(null);
+        }
+      })
+      .finally(() => {
+        if (requestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+          setLoading(false);
+        }
+      });
+  }, [sessionId, topicId]);
 
   // 选中节点时摄像机聚焦
   useEffect(() => {

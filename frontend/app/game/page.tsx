@@ -3,8 +3,10 @@
 import { useState, useEffect, useCallback } from "react";
 import NavSidebar from "@/components/NavSidebar";
 import UserTopbar from "@/components/UserTopbar";
+import { API_BASE_URL } from "@/lib/api";
+import { useAuthSession } from "@/lib/session";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API = API_BASE_URL;
 
 interface NodeInfo {
   id: number;
@@ -38,7 +40,7 @@ interface Stats {
 }
 
 export default function GamePage() {
-  const [session, setSession] = useState<string | null>(null);
+  const { sessionId: session, scopeKey } = useAuthSession();
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [result, setResult] = useState<AnswerResult | null>(null);
@@ -47,9 +49,12 @@ export default function GamePage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const s = localStorage.getItem("bili_session");
-    if (s) setSession(s);
-  }, []);
+    setChallenge(null);
+    setSelected(null);
+    setResult(null);
+    setStats({ total: 0, correct: 0, streak: 0, best_streak: 0, score: 0 });
+    setError(null);
+  }, [scopeKey]);
 
   const fetchChallenge = useCallback(async () => {
     if (!session) return;

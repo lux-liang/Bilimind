@@ -1,29 +1,50 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { searchApi, SearchResults } from "@/lib/api";
 import NavSidebar from "@/components/NavSidebar";
 import UserTopbar from "@/components/UserTopbar";
+import { isActiveSession, useAuthSession } from "@/lib/session";
 
 type TabType = "all" | "nodes" | "videos" | "segments";
 
 export default function SearchPage() {
+  const { sessionId, scopeKey } = useAuthSession();
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<TabType>("all");
   const [results, setResults] = useState<SearchResults | null>(null);
   const [loading, setLoading] = useState(false);
+  const requestIdRef = useRef(0);
 
-  const doSearch = async () => {
-    if (!query.trim()) return;
+  useEffect(() => {
+    setResults(null);
+    setLoading(false);
+  }, [sessionId, scopeKey]);
+
+  const doSearch = async (nextTab?: TabType) => {
+    const searchTab = nextTab || tab;
+    if (!query.trim() || !sessionId) {
+      setResults(null);
+      return;
+    }
+    const requestId = ++requestIdRef.current;
+    const activeSessionId = sessionId;
     setLoading(true);
     try {
-      const data = await searchApi.search(query, tab);
-      setResults(data);
+      const data = await searchApi.search(query, searchTab, 20, sessionId);
+      if (requestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+        setResults(data);
+      }
     } catch (e) {
-      console.error("Search failed:", e);
+      if (requestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+        console.error("Search failed:", e);
+        setResults(null);
+      }
     } finally {
-      setLoading(false);
+      if (requestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+        setLoading(false);
+      }
     }
   };
 
@@ -73,7 +94,7 @@ export default function SearchPage() {
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={handleKeyDown}
               />
-              <button className="btn btn-primary" onClick={doSearch} disabled={loading || !query.trim()}>
+              <button className="btn btn-primary" onClick={() => void doSearch()} disabled={loading || !query.trim()}>
                 {loading ? "搜索中..." : "搜索"}
               </button>
             </div>
@@ -84,7 +105,10 @@ export default function SearchPage() {
                 <button
                   key={t.key}
                   className={`search-tab ${tab === t.key ? "active" : ""}`}
-                  onClick={() => { setTab(t.key); if (results) doSearch(); }}
+                  onClick={() => {
+                    setTab(t.key);
+                    if (results) void doSearch(t.key);
+                  }}
                 >
                   {t.label}
                   {results && t.key === "nodes" && nodeCount > 0 && ` (${nodeCount})`}
@@ -177,7 +201,7 @@ export default function SearchPage() {
 
               {!results && !loading && (
                 <div className="tree-empty">
-                  <p>输入关键词搜索知识节点、视频和时间片段</p>
+                  <p>{sessionId ? "输入关键词搜索知识节点、视频和时间片段" : "请先登录后再搜索当前账号知识库"}</p>
                 </div>
               )}
             </div>

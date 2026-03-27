@@ -14,6 +14,9 @@
     "@tsparticles/preset-stars": "^3.2.0",
     "@tsparticles/react": "^3.0.0",
     "@tsparticles/slim": "^3.9.1",
+    "markmap-lib": "^0.18.12",
+    "markmap-toolbar": "^0.18.12",
+    "markmap-view": "^0.18.12",
     "next": "16.1.4",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -23,7 +26,8 @@
     "remark-gfm": "^4.0.0",
     "siriwave": "^2.4.0",
     "supermemo": "^2.0.23",
-    "three": "^0.183.2"
+    "three": "^0.183.2",
+    "wavesurfer.js": "^7.12.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
