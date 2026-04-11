@@ -20,7 +20,7 @@ engine = create_async_engine(
     echo=settings.debug,
     future=True,
     connect_args={
-        "timeout": 60,         # busy_timeout: 写冲突时最多等待60秒
+        "timeout": 30,         # busy_timeout: 写冲突时等待30秒
         "check_same_thread": False,
     },
     pool_pre_ping=True,
@@ -32,7 +32,7 @@ engine = create_async_engine(
 def _set_sqlite_pragma(dbapi_connection, connection_record):
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA busy_timeout=60000")
+    cursor.execute("PRAGMA busy_timeout=30000")
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.execute("PRAGMA synchronous=NORMAL")
     cursor.close()
