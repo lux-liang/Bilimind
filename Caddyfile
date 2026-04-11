@@ -1,0 +1,41 @@
+# ============================================================
+# BiliMind - Caddy 反向代理配置
+# ============================================================
+#
+# 用途：将公网 :80 请求统一转发到 Next.js 前端 (localhost:3000)
+#       Next.js 内置的 /api/proxy 会自动转发 API 请求到 FastAPI (localhost:8000)
+#
+# 部署路径：/opt/bilimind/Caddyfile
+#
+# --- 第一阶段：IP 访问 (HTTP) ---
+# 当前配置：监听 80 端口，纯 HTTP
+#
+# --- 第二阶段：域名 + HTTPS ---
+# 将 ":80" 替换为你的域名即可，例如：
+#   bilimind.example.com {
+#       reverse_proxy localhost:3000
+#   }
+# Caddy 会自动申请 Let's Encrypt 证书并配置 HTTPS + HTTP→HTTPS 跳转
+# ============================================================
+
+:80 {
+    # 所有请求转发到 Next.js 前端
+    # Next.js 的 /api/proxy/* 路由会在服务端转发到 FastAPI localhost:8000
+    reverse_proxy localhost:3000 {
+        # 传递真实客户端信息
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+
+        # 支持 WebSocket / SSE 流式传输（问答流式返回需要）
+        flush_interval -1
+    }
+
+    # 访问日志
+    log {
+        output file /opt/bilimind/logs/caddy-access.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+    }
+}
