@@ -1,10 +1,9 @@
 "use client";
 
-import { useState, useEffect, useMemo, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import NavSidebar from "@/components/NavSidebar";
 import UserTopbar from "@/components/UserTopbar";
-import KnowledgeGraph3D from "@/components/KnowledgeGraph3D";
 import Link from "next/link";
 import AIAssistant from "@/components/AIAssistant";
 import {
@@ -35,12 +34,6 @@ function LearningPathContent() {
   const [error, setError] = useState("");
   const [popularTopics, setPopularTopics] = useState<PopularTopic[]>([]);
   const [focusedStepId, setFocusedStepId] = useState<number | null>(null);
-
-  // 从路径步骤中提取节点 ID 列表（用于 3D 图谱高亮）
-  const pathNodeIds = useMemo(() => {
-    if (!path) return [];
-    return path.steps.map((s) => s.node_id);
-  }, [path]);
 
   useEffect(() => {
     setPath(null);
@@ -162,7 +155,7 @@ function LearningPathContent() {
               </div>
             )}
 
-            {/* 路径结果：左右分栏 */}
+            {/* 路径结果 */}
             {path && (
               <div className="learning-path-result">
                 <div className="path-result-header">
@@ -200,8 +193,7 @@ function LearningPathContent() {
                 </div>
 
                 <div className="path-split-view">
-                  {/* 左侧：步骤卡片 */}
-                  <div className="path-steps-panel">
+                  <div className="path-steps-panel" style={{ flex: "1 1 100%", maxHeight: "none" }}>
                     <div className="path-steps">
                       {path.steps.map((step, i) => (
                         <PathStepCard
@@ -213,15 +205,6 @@ function LearningPathContent() {
                         />
                       ))}
                     </div>
-                  </div>
-
-                  {/* 右侧：3D 图谱（高亮路径） */}
-                  <div className="path-graph-panel">
-                    <KnowledgeGraph3D
-                      selectedNodeId={focusedStepId}
-                      onNodeSelect={(id) => setFocusedStepId(id)}
-                      highlightPath={pathNodeIds}
-                    />
                   </div>
                 </div>
               </div>

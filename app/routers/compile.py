@@ -73,6 +73,14 @@ async def compile_video_endpoint(
             detail="未配置 LLM API Key。请在项目根目录 .env 设置 DASHSCOPE_API_KEY 或 OPENAI_API_KEY 后重启后端。",
         )
 
+    # 避免同一会话并发触发多个编译任务，降低 SQLite 写锁冲突概率。
+    for task in compile_tasks.values():
+        if task.get("session_id") == request.session_id and task.get("status") == "running":
+            raise HTTPException(
+                status_code=409,
+                detail="当前账号已有编译任务正在运行，请等待完成后再发起新的编译。",
+            )
+
     task_id = str(uuid.uuid4())
 
     compile_tasks[task_id] = {

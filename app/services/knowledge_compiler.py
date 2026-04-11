@@ -535,12 +535,33 @@ async def compile_video(
         db.add(record)
         segment_records.append(record)
     await db.flush()
+    # 关键：不要把后续 LLM 调用放在同一个未提交事务里，否则会长时间占用 SQLite 写锁。
+    # 这里先提交“旧数据删除 + 新片段写入”，释放写锁，降低并发请求被 lock 的概率。
+    await db.commit()
+
+    # 保护：若本次仅拿到 basic_info 兜底片段，则不进行 LLM 编译，避免凭标题/简介臆测错误知识。
+    non_basic_segments = [s for s in segment_records if (s.source_type or "").lower() != "basic"]
+    if not non_basic_segments:
+        for seg in segment_records:
+            seg.extraction_status = "done"
+            seg.knowledge_density = 0.0
+            seg.is_peak = False
+        await db.commit()
+        await _report(0.95, "字幕/ASR不可用，仅有基础信息，已跳过知识编译")
+        logger.warning(f"[{bvid}] 仅基础信息片段，跳过知识编译")
+        return {
+            "bvid": bvid,
+            "concept_count": 0,
+            "claim_count": 0,
+            "peak_count": 0,
+            "segment_count": len(segment_records),
+        }
 
     # Step 2: 逐片段编译
     await _report(0.28, f"开始编译 {len(segment_records)} 个片段...")
     all_segment_results = []
-    total_segments = len(segment_records)
-    for i, seg_rec in enumerate(segment_records):
+    total_segments = len(non_basic_segments)
+    for i, seg_rec in enumerate(non_basic_segments):
         seg_result = await _compile_segment(
             text=seg_rec.raw_text,
             video_title=video_title,

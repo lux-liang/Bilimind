@@ -475,8 +475,8 @@ export default function TreePage() {
                           <span className="relation-icon">↔</span> 相关知识
                         </h4>
                         <div className="relation-chips">
-                          {nodeDetail.related_nodes.map((r) => (
-                            <span key={r.id} className="relation-chip" onClick={() => handleNodeSelect(r.id)}>
+                          {nodeDetail.related_nodes.map((r, idx) => (
+                            <span key={`${r.id}-${r.node_type}-${idx}`} className="relation-chip" onClick={() => handleNodeSelect(r.id)}>
                               <small className="chip-type">{r.node_type}</small>{r.name}
                             </span>
                           ))}

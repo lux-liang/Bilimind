@@ -104,6 +104,29 @@ class GraphStore:
                 node_data = self.get_node(src) or {}
                 results.append({"id": src, "relation": data.get("relation_type"), **node_data})
 
+        # 双向查询时同一节点可能同时出现在入边与出边中，统一去重避免上层重复展示。
+        if direction == "both" and results:
+            deduped: dict[int, dict] = {}
+            for item in results:
+                nid = item.get("id")
+                if nid is None:
+                    continue
+                existing = deduped.get(nid)
+                if existing is None:
+                    deduped[nid] = item
+                    continue
+                old_score = (
+                    float(existing.get("confidence", 0.0) or 0.0),
+                    int(existing.get("source_count", 0) or 0),
+                )
+                new_score = (
+                    float(item.get("confidence", 0.0) or 0.0),
+                    int(item.get("source_count", 0) or 0),
+                )
+                if new_score > old_score:
+                    deduped[nid] = item
+            results = list(deduped.values())
+
         return results
 
     def get_prerequisites(self, node_id: int) -> list[dict]:

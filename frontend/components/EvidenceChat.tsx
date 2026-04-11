@@ -106,10 +106,13 @@ export default function EvidenceChat({ selectedBvid = null }: EvidenceChatProps)
       if (evidenceJson) {
         try {
           const parsed = JSON.parse(evidenceJson);
-          if (Array.isArray(parsed) && requestIdRef.current === requestId && isActiveSession(activeSessionId)) {
+          const parsedEvidence = Array.isArray(parsed)
+            ? parsed
+            : (Array.isArray(parsed?.evidence) ? parsed.evidence : []);
+          if (requestIdRef.current === requestId && isActiveSession(activeSessionId)) {
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === assistantId ? { ...m, evidence: parsed } : m
+                m.id === assistantId ? { ...m, evidence: parsedEvidence } : m
               )
             );
           }

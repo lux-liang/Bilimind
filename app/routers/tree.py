@@ -44,6 +44,58 @@ def _score_segment_match(
     return rule_score_segment_match(node, link, segment, video)
 
 
+def _clean_relation_nodes(
+    nodes: list[dict],
+    *,
+    current_node_id: Optional[int] = None,
+    min_confidence: Optional[float] = None,
+) -> list[dict]:
+    """关系节点去重与质量过滤，避免重复/噪声影响知识树分析稳定性。"""
+    threshold = settings.tree_min_confidence if min_confidence is None else min_confidence
+    deduped: dict[int, dict] = {}
+
+    for item in nodes:
+        nid = item.get("id")
+        if not isinstance(nid, int):
+            continue
+        if current_node_id is not None and nid == current_node_id:
+            continue
+
+        name = (item.get("name") or "").strip()
+        if not name or _is_noise_name(name):
+            continue
+
+        confidence = float(item.get("confidence", 0.0) or 0.0)
+        if confidence < threshold:
+            continue
+
+        previous = deduped.get(nid)
+        if previous is None:
+            deduped[nid] = item
+            continue
+
+        prev_score = (
+            float(previous.get("confidence", 0.0) or 0.0),
+            int(previous.get("source_count", 0) or 0),
+        )
+        new_score = (
+            confidence,
+            int(item.get("source_count", 0) or 0),
+        )
+        if new_score > prev_score:
+            deduped[nid] = item
+
+    cleaned = list(deduped.values())
+    cleaned.sort(
+        key=lambda n: (
+            -float(n.get("confidence", 0.0) or 0.0),
+            -int(n.get("source_count", 0) or 0),
+            n.get("name", ""),
+        )
+    )
+    return cleaned
+
+
 @router.get("")
 async def get_knowledge_tree(
     min_confidence: Optional[float] = Query(None, description="最低置信度"),
@@ -230,16 +282,29 @@ async def get_node_detail(
             main_topic = {"id": topic.id, "name": topic.name}
 
     # 关系
-    prerequisites = gs.get_prerequisites(node_id)
-    successors = gs.get_successors(node_id)
-    related = gs.get_related(node_id)
+    prerequisites = _clean_relation_nodes(gs.get_prerequisites(node_id), current_node_id=node_id)
+    successors = _clean_relation_nodes(gs.get_successors(node_id), current_node_id=node_id)
+    related = _clean_relation_nodes(gs.get_related(node_id), current_node_id=node_id)
 
     # 关联主题
     related_topics = []
+    related_topic_ids = set()
     part_of_targets = gs.get_neighbors(node_id, relation_type="part_of", direction="out")
     for t in part_of_targets:
-        if t.get("node_type") == "topic" and t["id"] != (node.main_topic_id or -1):
-            related_topics.append({"id": t["id"], "name": t.get("name", "")})
+        tid = t.get("id")
+        if not isinstance(tid, int):
+            continue
+        tname = (t.get("name") or "").strip()
+        if (
+            t.get("node_type") == "topic"
+            and tid != (node.main_topic_id or -1)
+            and tid not in related_topic_ids
+            and tname
+            and not _is_noise_name(tname)
+            and float(t.get("confidence", 0.0) or 0.0) >= settings.tree_min_confidence
+        ):
+            related_topic_ids.add(tid)
+            related_topics.append({"id": tid, "name": tname})
 
     # 关联视频和片段
     links_query = select(NodeSegmentLink).where(NodeSegmentLink.node_id == node_id)

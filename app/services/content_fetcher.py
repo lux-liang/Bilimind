@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import asyncio
 import math
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -58,6 +59,110 @@ class ContentFetcher:
         self.bili = bilibili_service
         self.asr = asr_service
         self.segment_merge_seconds = settings.extraction_segment_merge_seconds
+
+    def _is_subtitle_usable(
+        self,
+        items: list[dict],
+        duration: Optional[int] = None,
+    ) -> bool:
+        """判断字幕是否足够支撑知识抽取；过短/覆盖不足时应回退 ASR。"""
+        if not items:
+            return False
+
+        text_len = sum(len((it.get("content") or "").strip()) for it in items)
+        if text_len < 120:
+            return False
+
+        starts = [float(it.get("from", 0.0) or 0.0) for it in items if it.get("from") is not None]
+        ends = [float(it.get("to", 0.0) or 0.0) for it in items if it.get("to") is not None]
+        covered_seconds = 0.0
+        for it in items:
+            s = it.get("from")
+            e = it.get("to")
+            if s is None or e is None:
+                continue
+            try:
+                delta = float(e) - float(s)
+            except Exception:
+                continue
+            if delta > 0:
+                covered_seconds += delta
+
+        if duration and duration > 0:
+            ratio = covered_seconds / float(duration)
+            # 长视频字幕只覆盖很小开头时，通常是低质量/不完整字幕
+            if duration >= 600 and ratio < 0.12 and text_len < 1200:
+                return False
+            if ratio < 0.05 and text_len < 400:
+                return False
+            if ends and max(ends) < min(120.0, float(duration) * 0.1) and text_len < 600:
+                return False
+        else:
+            if len(items) <= 2 and text_len < 300:
+                return False
+
+        return True
+
+    def _extract_title_keywords(self, title: Optional[str]) -> list[str]:
+        """从标题提取关键词，用于判断字幕是否疑似串视频。"""
+        if not title:
+            return []
+        raw = title.strip()
+        if not raw:
+            return []
+
+        zh_stop = {
+            "视频", "教程", "讲解", "入门", "基础", "实战", "完整版", "全程", "详细",
+            "分钟", "小时", "包懂", "速通", "手把手", "第一期", "第二期", "第",
+            "合集", "系列", "直播", "回放", "课程", "学习", "笔记", "总结",
+        }
+        en_stop = {"video", "tutorial", "lesson", "course", "part", "ep", "live", "full"}
+
+        kws: list[str] = []
+        seen = set()
+
+        for w in re.findall(r"[A-Za-z][A-Za-z0-9+#._-]{2,}", raw):
+            lw = w.lower().strip()
+            if lw in en_stop:
+                continue
+            if lw not in seen:
+                kws.append(lw)
+                seen.add(lw)
+
+        for w in re.findall(r"[\u4e00-\u9fff]{2,8}", raw):
+            ww = w.strip()
+            if ww in zh_stop:
+                continue
+            if ww not in seen:
+                kws.append(ww)
+                seen.add(ww)
+
+        return kws[:12]
+
+    def _is_subtitle_aligned_with_title(self, items: list[dict], title: Optional[str]) -> bool:
+        """字幕与标题关键词一致性检查，避免拿到错误字幕后继续抽取。"""
+        keywords = self._extract_title_keywords(title)
+        if not keywords:
+            return True
+
+        text = " ".join((it.get("content") or "") for it in items).lower()
+        if not text.strip():
+            return False
+
+        hits = 0
+        for kw in keywords:
+            if kw.lower() in text:
+                hits += 1
+
+        # 有较明确关键词但一个都没命中，判定为高风险串视频
+        if len(keywords) >= 2 and hits == 0:
+            return False
+
+        # 关键词较多但命中极低，也视为异常
+        if len(keywords) >= 5 and (hits / max(len(keywords), 1)) < 0.15:
+            return False
+
+        return True
 
     async def fetch_from_url(self, url: str) -> tuple[VideoContent, list[dict]]:
         """
@@ -234,9 +339,31 @@ class ContentFetcher:
                 return []
 
         # 优先尝试字幕（有精确时间戳）
-        subtitle_segments = await self._try_subtitle_segments(bvid, cid, video_info)
+        subtitle_segments = []
+        for attempt in range(3):
+            subtitle_segments = await self._try_subtitle_segments(bvid, cid, video_info)
+            if subtitle_segments:
+                break
+            if attempt < 2:
+                await asyncio.sleep(0.6 * (attempt + 1))
         if subtitle_segments:
-            return subtitle_segments
+            subtitle_items = []
+            for seg in subtitle_segments:
+                subtitle_items.append({
+                    "content": seg.get("raw_text", ""),
+                    "from": seg.get("start_time"),
+                    "to": seg.get("end_time"),
+                })
+            if not self._is_subtitle_aligned_with_title(subtitle_items, title):
+                logger.warning(f"[{bvid}] 字幕与标题不一致，已拒绝使用字幕")
+                subtitle_segments = []
+                subtitle_items = []
+            if self._is_subtitle_usable(subtitle_items, duration):
+                return subtitle_segments
+            if subtitle_items:
+                logger.warning(
+                    f"[{bvid}] 字幕覆盖不足或质量偏低，回退 ASR。"
+                )
 
         # 尝试 ASR（无精确时间戳，按等时分段）
         asr_text = await self._try_asr(bvid, cid)
@@ -265,6 +392,16 @@ class ContentFetcher:
         try:
             items = await self._get_subtitle_items(bvid, cid, video_info)
             if not items:
+                return None
+            title = (video_info or {}).get("title") if video_info else None
+            if not self._is_subtitle_aligned_with_title(items, title):
+                logger.info(f"[{bvid}] 字幕与标题关键词不一致，跳过字幕")
+                return None
+            duration = None
+            if video_info:
+                duration = video_info.get("duration")
+            if not self._is_subtitle_usable(items, duration):
+                logger.info(f"[{bvid}] 字幕内容过短或覆盖不足，跳过字幕")
                 return None
             text = "\n".join(item["content"] for item in items if item.get("content"))
             if len(text) < 50:
@@ -546,4 +683,3 @@ class ContentFetcher:
             preview = text[:120].replace("\n", " ").strip()
             logger.info(f"[{bvid}] Recognition ASR 成功，长度={len(text)}，预览：{preview}")
         return text
-

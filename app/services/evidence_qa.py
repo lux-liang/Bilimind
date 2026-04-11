@@ -313,7 +313,8 @@ async def _retrieve_evidence(
     rag_docs = []
     try:
         rag = RAGService()
-        rag_docs = rag.search(question, k=3, session_id=session_id)
+        bvid_filter = [bvid] if bvid else None
+        rag_docs = rag.search(question, k=3, bvids=bvid_filter, session_id=session_id)
         logger.info(f"[EvidenceQA] RAG 召回: {len(rag_docs)} 条")
     except Exception as e:
         logger.warning(f"[EvidenceQA] RAG 检索失败: {e}")

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, get_db_context
 from app.models import (
     FavoriteFolder, FavoriteVideo, VideoCache, UserSession,
-    ContentSource, VideoContent, Segment, KnowledgeNode, NodeSegmentLink,
+    ContentSource, VideoContent, Segment, KnowledgeNode, KnowledgeEdge, NodeSegmentLink,
 )
 from app.services.bilibili import BilibiliService
 from app.services.content_fetcher import ContentFetcher, identify_platform
@@ -222,10 +222,19 @@ async def _sync_folder(
     if not videos:
         if total_in_folder and total_in_folder > 0:
             logger.warning(f"[{folder_id}] 收藏夹返回空列表，跳过删除逻辑")
-            existing_count = await db.scalar(
-                select(func.count(FavoriteVideo.bvid))
-                .where(FavoriteVideo.folder_id == folder_id)
+            folder_row = await db.execute(
+                select(FavoriteFolder.id).where(
+                    FavoriteFolder.session_id == session_id,
+                    FavoriteFolder.media_id == folder_id,
+                )
             )
+            folder_pk = folder_row.scalar_one_or_none()
+            existing_count = 0
+            if folder_pk is not None:
+                existing_count = await db.scalar(
+                    select(func.count(FavoriteVideo.bvid))
+                    .where(FavoriteVideo.folder_id == folder_pk)
+                )
             return {
                 "folder_id": folder_id,
                 "total": total_in_folder,
@@ -352,7 +361,13 @@ async def _sync_folder(
         # 尝试添加到向量库（可能失败，但不影响记录入库）
         try:
             global_count = await db.scalar(
-                select(func.count()).select_from(FavoriteVideo).where(FavoriteVideo.bvid == bvid)
+                select(func.count())
+                .select_from(FavoriteVideo)
+                .join(FavoriteFolder, FavoriteVideo.folder_id == FavoriteFolder.id)
+                .where(
+                    FavoriteVideo.bvid == bvid,
+                    FavoriteFolder.session_id == session_id,
+                )
             )
             # 检查缓存内容是否缺失
             result = await db.execute(select(VideoCache).where(VideoCache.bvid == bvid))
@@ -453,9 +468,11 @@ async def _sync_folder(
             other_count = await db.scalar(
                 select(func.count())
                 .select_from(FavoriteVideo)
+                .join(FavoriteFolder, FavoriteVideo.folder_id == FavoriteFolder.id)
                 .where(
                     FavoriteVideo.bvid == bvid,
                     FavoriteVideo.folder_id != folder.id,
+                    FavoriteFolder.session_id == session_id,
                 )
             )
             if other_count == 0:
@@ -490,6 +507,36 @@ async def _sync_folder(
         "message": "同步完成",
         "last_sync_at": folder.last_sync_at,
     }
+
+
+async def _reset_session_knowledge_data(
+    db: AsyncSession,
+    rag: RAGService,
+    session_id: str,
+) -> None:
+    """清理当前会话旧知识数据，保证知识树仅反映本次选择的收藏夹。"""
+    folder_rows = await db.execute(
+        select(FavoriteFolder.id).where(FavoriteFolder.session_id == session_id)
+    )
+    folder_ids = [row[0] for row in folder_rows.fetchall()]
+
+    if folder_ids:
+        await db.execute(
+            delete(FavoriteVideo).where(FavoriteVideo.folder_id.in_(folder_ids))
+        )
+
+    await db.execute(delete(FavoriteFolder).where(FavoriteFolder.session_id == session_id))
+    await db.execute(delete(NodeSegmentLink).where(NodeSegmentLink.session_id == session_id))
+    await db.execute(delete(KnowledgeEdge).where(KnowledgeEdge.session_id == session_id))
+    await db.execute(delete(KnowledgeNode).where(KnowledgeNode.session_id == session_id))
+    await db.execute(delete(Segment).where(Segment.session_id == session_id))
+
+    await db.commit()
+
+    try:
+        rag.clear_collection(session_id=session_id)
+    except Exception as e:
+        logger.warning(f"清理向量库失败 [{session_id}]: {e}")
 
 
 @router.get("/stats")
@@ -693,6 +740,10 @@ async def _build_knowledge_base_task(
             total_removed = 0
 
             async with get_db_context() as db:
+                build_tasks[task_id]["current_step"] = "清理历史数据..."
+                build_tasks[task_id]["progress"] = 3
+                await _reset_session_knowledge_data(db, rag, session_id)
+
                 for idx, folder_id in enumerate(folder_ids, start=1):
                     build_tasks[task_id]["current_step"] = f"同步收藏夹 {folder_id}"
 
