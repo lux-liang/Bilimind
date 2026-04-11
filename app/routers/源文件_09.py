@@ -7,6 +7,7 @@
 - GET  /compile/result/{bvid}  — 获取编译结果
 """
 import uuid
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Depends
@@ -73,6 +74,14 @@ async def compile_video_endpoint(
             detail="未配置 LLM API Key。请在项目根目录 .env 设置 DASHSCOPE_API_KEY 或 OPENAI_API_KEY 后重启后端。",
         )
 
+    # 限制同一 session 的并发编译任务，避免 SQLite 写锁冲突
+    for existing_task_id, task in compile_tasks.items():
+        if task.get("session_id") == request.session_id and task.get("status") == "running":
+            return CompileTaskResponse(
+                task_id=existing_task_id,
+                message="已有编译任务进行中，请等待完成后再发起新任务",
+            )
+
     task_id = str(uuid.uuid4())
 
     compile_tasks[task_id] = {
@@ -129,14 +138,30 @@ async def _compile_video_task(
                 task["progress"] = max(float(task.get("progress", 0.0)), float(progress))
                 task["message"] = message
 
-            async with get_db_context() as db:
-                result = await compile_video(
-                    db=db,
-                    bvid=bvid,
-                    session_id=session_id,
-                    content_fetcher=content_fetcher,
-                    progress_callback=report_progress,
-                )
+            # 数据库写锁冲突时进行短重试，提升 SQLite 下并发稳定性
+            last_error: Optional[Exception] = None
+            result = None
+            for attempt in range(3):
+                try:
+                    async with get_db_context() as db:
+                        result = await compile_video(
+                            db=db,
+                            bvid=bvid,
+                            session_id=session_id,
+                            content_fetcher=content_fetcher,
+                            progress_callback=report_progress,
+                        )
+                    break
+                except Exception as e:
+                    last_error = e
+                    if "database is locked" not in str(e).lower() or attempt == 2:
+                        raise
+                    wait_s = 1.0 + attempt * 1.2
+                    logger.warning(f"[{bvid}] SQLite 写锁冲突，{wait_s:.1f}s 后重试({attempt + 1}/3)")
+                    await asyncio.sleep(wait_s)
+
+            if result is None and last_error is not None:
+                raise last_error
 
             compile_tasks[task_id]["status"] = "completed"
             compile_tasks[task_id]["progress"] = 1.0
@@ -154,6 +179,8 @@ async def _compile_video_task(
         logger.error(f"编译任务失败 [{bvid}]: {e}")
         message = str(e)
         lowered = message.lower()
+        if "database is locked" in lowered:
+            message = "数据库忙（SQLite 写锁冲突）。请稍后重试，或避免同时执行“构建知识树”和“编译视频”。"
         if "invalid_api_key" in lowered or "incorrect api key" in lowered or "鉴权失败" in message:
             message = "LLM API Key 无效，请检查 DASHSCOPE_API_KEY / OPENAI_API_KEY 并重启后端。"
         compile_tasks[task_id]["status"] = "failed"

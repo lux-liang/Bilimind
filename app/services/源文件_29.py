@@ -280,6 +280,7 @@ def _merge_concepts(all_segment_results: list[dict]) -> dict:
         seg_start = seg_result.get("start_time")
         seg_end = seg_result.get("end_time")
         seg_text = seg_result.get("raw_text", "")
+        seg_index = seg_result.get("segment_index")
 
         # 建立本片段内 concept name -> normalized 映射
         local_name_map: dict[str, str] = {}
@@ -318,6 +319,7 @@ def _merge_concepts(all_segment_results: list[dict]) -> dict:
                     "start_time": seg_start,
                     "end_time": seg_end,
                     "raw_text": seg_text,
+                    "segment_index": seg_index,
                 })
 
         # 收集前置关系
@@ -463,100 +465,26 @@ async def compile_video(
 
     logger.info(f"[{bvid}] 获取到 {len(segments_data)} 个片段")
 
-    # 清除旧的编译数据（如果存在）
-    existing_concepts = await db.execute(
-        select(Concept).where(
-            Concept.session_id == session_id,
-        )
-    )
-    existing_concept_list = existing_concepts.scalars().all()
-    # 检查是否有与此视频关联的 claim
-    video_claim_concept_ids = set()
-    for concept in existing_concept_list:
-        claim_result = await db.execute(
-            select(Claim.id).where(
-                Claim.concept_id == concept.id,
-                Claim.video_bvid == bvid,
-            )
-        )
-        if claim_result.scalars().first() is not None:
-            video_claim_concept_ids.add(concept.id)
-
-    # 删除此视频的旧 claims
-    if video_claim_concept_ids:
-        from sqlalchemy import delete
-        await db.execute(
-            delete(Claim).where(
-                Claim.video_bvid == bvid,
-                Claim.session_id == session_id,
-            )
-        )
-        # 删除没有其他 claim 的空概念
-        for cid in video_claim_concept_ids:
-            remaining = await db.scalar(
-                select(func.count()).select_from(Claim).where(Claim.concept_id == cid)
-            )
-            if remaining == 0:
-                await db.execute(
-                    delete(Concept).where(Concept.id == cid)
-                )
-        # 删除旧的 ConceptRelation
-        await db.execute(
-            delete(ConceptRelation).where(
-                ConceptRelation.session_id == session_id,
-            )
-        )
-
-    # 删除旧 Segment 记录
-    from sqlalchemy import delete as sql_delete
-    await db.execute(
-        sql_delete(Segment).where(
-            Segment.video_bvid == bvid,
-            Segment.session_id == session_id,
-        )
-    )
-    await db.flush()
-
-    # 写入新 Segment 记录
-    segment_records = []
-    for seg in segments_data:
-        record = Segment(
-            video_bvid=bvid,
-            segment_index=seg["segment_index"],
+    # Step 2: 逐片段编译
+    await _report(0.28, f"开始编译 {len(segments_data)} 个片段...")
+    all_segment_results = []
+    total_segments = len(segments_data)
+    for i, seg in enumerate(segments_data):
+        seg_result = await _compile_segment(
+            text=seg.get("raw_text", ""),
+            video_title=video_title,
             start_time=seg.get("start_time"),
             end_time=seg.get("end_time"),
-            raw_text=seg["raw_text"],
-            cleaned_text=seg["raw_text"],
-            source_type=seg.get("source_type", "unknown"),
-            confidence=seg.get("confidence", 0.5),
-            extraction_status="pending",
-            session_id=session_id,
-        )
-        db.add(record)
-        segment_records.append(record)
-    await db.flush()
-
-    # Step 2: 逐片段编译
-    await _report(0.28, f"开始编译 {len(segment_records)} 个片段...")
-    all_segment_results = []
-    total_segments = len(segment_records)
-    for i, seg_rec in enumerate(segment_records):
-        seg_result = await _compile_segment(
-            text=seg_rec.raw_text,
-            video_title=video_title,
-            start_time=seg_rec.start_time,
-            end_time=seg_rec.end_time,
         )
         # 附加片段元信息
-        seg_result["start_time"] = seg_rec.start_time
-        seg_result["end_time"] = seg_rec.end_time
-        seg_result["raw_text"] = seg_rec.raw_text
-        seg_result["segment_id"] = seg_rec.id
+        seg_result["start_time"] = seg.get("start_time")
+        seg_result["end_time"] = seg.get("end_time")
+        seg_result["raw_text"] = seg.get("raw_text", "")
+        seg_result["segment_index"] = seg.get("segment_index", i)
         all_segment_results.append(seg_result)
 
-        seg_rec.extraction_status = "done"
         logger.debug(
-            f"[{bvid}] 片段 {seg_rec.segment_index}: "
+            f"[{bvid}] 片段 {seg_result['segment_index']}: "
             f"{len(seg_result.get('concepts', []))} 概念, "
             f"{len(seg_result.get('claims', []))} 论断"
         )
@@ -573,6 +501,78 @@ async def compile_video(
         f"{sum(len(c['claims']) for c in concept_map.values())} 论断, "
         f"{len(prerequisite_pairs)} 前置关系"
     )
+
+    # Step 3.5: 短事务清理旧数据并写入 Segment，避免长时间持有 SQLite 写锁
+    await _report(0.88, "正在准备写入数据库...")
+    existing_concepts = await db.execute(
+        select(Concept).where(
+            Concept.session_id == session_id,
+        )
+    )
+    existing_concept_list = existing_concepts.scalars().all()
+
+    video_claim_concept_ids = set()
+    for concept in existing_concept_list:
+        claim_result = await db.execute(
+            select(Claim.id).where(
+                Claim.concept_id == concept.id,
+                Claim.video_bvid == bvid,
+            )
+        )
+        if claim_result.scalars().first() is not None:
+            video_claim_concept_ids.add(concept.id)
+
+    if video_claim_concept_ids:
+        from sqlalchemy import delete
+        await db.execute(
+            delete(Claim).where(
+                Claim.video_bvid == bvid,
+                Claim.session_id == session_id,
+            )
+        )
+        for cid in video_claim_concept_ids:
+            remaining = await db.scalar(
+                select(func.count()).select_from(Claim).where(Claim.concept_id == cid)
+            )
+            if remaining == 0:
+                await db.execute(
+                    delete(Concept).where(Concept.id == cid)
+                )
+        await db.execute(
+            delete(ConceptRelation).where(
+                ConceptRelation.session_id == session_id,
+            )
+        )
+
+    from sqlalchemy import delete as sql_delete
+    await db.execute(
+        sql_delete(Segment).where(
+            Segment.video_bvid == bvid,
+            Segment.session_id == session_id,
+        )
+    )
+
+    segment_records = []
+    segment_index_to_id: dict[int, int] = {}
+    for i, seg in enumerate(segments_data):
+        segment_index = int(seg.get("segment_index", i))
+        record = Segment(
+            video_bvid=bvid,
+            segment_index=segment_index,
+            start_time=seg.get("start_time"),
+            end_time=seg.get("end_time"),
+            raw_text=seg.get("raw_text", ""),
+            cleaned_text=seg.get("raw_text", ""),
+            source_type=seg.get("source_type", "unknown"),
+            confidence=seg.get("confidence", 0.5),
+            extraction_status="pending",
+            session_id=session_id,
+        )
+        db.add(record)
+        segment_records.append(record)
+    await db.flush()
+    for sr in segment_records:
+        segment_index_to_id[sr.segment_index] = sr.id
 
     # Step 4: 写入 Concept 和 Claim 表
     await _report(0.9, "正在写入知识点与论断...")
@@ -613,12 +613,19 @@ async def compile_video(
 
         # 写入 Claim
         for cl in cdata["claims"]:
-            # 查找对应的 segment_id
-            seg_id = None
-            for seg_rec in segment_records:
-                if seg_rec.start_time == cl.get("start_time") and seg_rec.end_time == cl.get("end_time"):
-                    seg_id = seg_rec.id
-                    break
+            # 优先按 segment_index 关联，时间戳为兜底
+            seg_index_raw = cl.get("segment_index")
+            seg_index = None
+            if isinstance(seg_index_raw, int):
+                seg_index = seg_index_raw
+            elif isinstance(seg_index_raw, str) and seg_index_raw.strip("-").isdigit():
+                seg_index = int(seg_index_raw)
+            seg_id = segment_index_to_id.get(seg_index) if seg_index is not None else None
+            if seg_id is None:
+                for seg_rec in segment_records:
+                    if seg_rec.start_time == cl.get("start_time") and seg_rec.end_time == cl.get("end_time"):
+                        seg_id = seg_rec.id
+                        break
 
             claim_row = Claim(
                 session_id=session_id,
@@ -681,6 +688,7 @@ async def compile_video(
             if sr.id == sd["segment_id"]:
                 sr.knowledge_density = sd["knowledge_density"]
                 sr.is_peak = sd["is_peak"]
+                sr.extraction_status = "done"
                 if sd["is_peak"]:
                     peak_count += 1
                 break
