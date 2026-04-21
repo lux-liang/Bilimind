@@ -18,7 +18,9 @@ REQUIRED_FILES = [
     "merged_nodes.json",
     "merged_graph.json",
     "learning_path.json",
+    "evidence_map.json",
     "validation_report.json",
+    "render_bundle.json",
     "pipeline_trace.json",
     "summary.json",
 ]
@@ -52,14 +54,18 @@ def main() -> int:
 
     graph = _load(run_dir / "merged_graph.json")
     path = _load(run_dir / "learning_path.json")
+    evidence_map = _load(run_dir / "evidence_map.json")
     validation = _load(run_dir / "validation_report.json")
+    render_bundle = _load(run_dir / "render_bundle.json")
     trace = _load(run_dir / "pipeline_trace.json")
 
     checks = {
         "has_nodes": len(graph.get("nodes", [])) > 0,
         "has_evidence": len(graph.get("evidence_links", [])) > 0,
+        "has_evidence_packets": len(evidence_map.get("evidence_packets", [])) > 0,
         "has_learning_path": len(path.get("steps", [])) > 0,
-        "stage_trace_complete": len(trace.get("stages", [])) >= 6,
+        "has_render_bundle": len(render_bundle.get("concept_cards", [])) > 0,
+        "stage_trace_complete": len(trace.get("stages", [])) >= 8,
         "validation_passed": validation.get("passed") is True,
     }
     passed = all(checks.values())
@@ -68,6 +74,7 @@ def main() -> int:
         "artifact_dir": str(run_dir),
         "checks": checks,
         "validation_summary": validation.get("summary", {}),
+        "stage_order": trace.get("stage_order", []),
     }, ensure_ascii=False, indent=2))
     return 0 if passed else 1
 

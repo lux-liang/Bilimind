@@ -41,6 +41,7 @@ def main() -> int:
         "artifact_dir": result["artifact_dir"],
         "video": summary["video"],
         "stats": summary["stats"],
+        "stage_order": result["pipeline_trace"].get("stage_order", []),
         "validation_passed": summary["harness"]["validation_passed"],
     }, ensure_ascii=False, indent=2))
     return 0 if summary["harness"]["validation_passed"] else 1

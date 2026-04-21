@@ -1,0 +1,214 @@
+{
+  "stage": "render",
+  "workspace_bundle_version": "workspace-harness-1",
+  "timeline": [
+    {
+      "segment_index": 0,
+      "start_time": 0.0,
+      "end_time": 70.0,
+      "density": 0.8,
+      "is_peak": false,
+      "concepts": [
+        "Agent 工作流",
+        "Harness Engineering",
+        "上下文管理",
+        "外部工具调用"
+      ],
+      "source_type": "sample_transcript",
+      "confidence": 0.98
+    },
+    {
+      "segment_index": 1,
+      "start_time": 70.0,
+      "end_time": 145.0,
+      "density": 1.0,
+      "is_peak": true,
+      "concepts": [
+        "Agent 工作流",
+        "上下文管理",
+        "外部工具调用",
+        "学习路径生成",
+        "证据时间点回链"
+      ],
+      "source_type": "sample_transcript",
+      "confidence": 0.98
+    },
+    {
+      "segment_index": 2,
+      "start_time": 145.0,
+      "end_time": 220.0,
+      "density": 0.4,
+      "is_peak": false,
+      "concepts": [
+        "外部工具调用",
+        "证据时间点回链"
+      ],
+      "source_type": "sample_transcript",
+      "confidence": 0.96
+    },
+    {
+      "segment_index": 3,
+      "start_time": 220.0,
+      "end_time": 300.0,
+      "density": 0.6,
+      "is_peak": false,
+      "concepts": [
+        "学习路径生成",
+        "证据时间点回链",
+        "验证反馈闭环"
+      ],
+      "source_type": "sample_transcript",
+      "confidence": 0.97
+    },
+    {
+      "segment_index": 4,
+      "start_time": 300.0,
+      "end_time": 360.0,
+      "density": 1.0,
+      "is_peak": true,
+      "concepts": [
+        "Agent 工作流",
+        "Harness Engineering",
+        "学习路径生成",
+        "证据时间点回链",
+        "验证反馈闭环"
+      ],
+      "source_type": "sample_transcript",
+      "confidence": 0.97
+    }
+  ],
+  "concept_cards": [
+    {
+      "node_id": "n1",
+      "name": "Harness Engineering",
+      "definition": "把 AI 能力封装进可观测、可验证、可回放工作流的工程方法。",
+      "difficulty": 3,
+      "review_status": "verified",
+      "evidence_count": 2,
+      "source_count": 2
+    },
+    {
+      "node_id": "n2",
+      "name": "Agent 工作流",
+      "definition": "把复杂 AI 任务拆成多个有输入输出契约的执行阶段。",
+      "difficulty": 2,
+      "review_status": "verified",
+      "evidence_count": 3,
+      "source_count": 3
+    },
+    {
+      "node_id": "n3",
+      "name": "上下文管理",
+      "definition": "控制每个阶段读取的信息范围，减少长文本噪声和模型幻觉。",
+      "difficulty": 3,
+      "review_status": "verified",
+      "evidence_count": 2,
+      "source_count": 2
+    },
+    {
+      "node_id": "n4",
+      "name": "外部工具调用",
+      "definition": "通过 API、CLI 或本地文件获取真实数据，让模型输出有来源。",
+      "difficulty": 3,
+      "review_status": "verified",
+      "evidence_count": 3,
+      "source_count": 3
+    },
+    {
+      "node_id": "n5",
+      "name": "证据时间点回链",
+      "definition": "把知识节点和论断连接回原视频的具体时间片段。",
+      "difficulty": 2,
+      "review_status": "verified",
+      "evidence_count": 4,
+      "source_count": 4
+    },
+    {
+      "node_id": "n6",
+      "name": "学习路径生成",
+      "definition": "根据前置关系、难度和证据覆盖生成可执行学习顺序。",
+      "difficulty": 3,
+      "review_status": "verified",
+      "evidence_count": 3,
+      "source_count": 3
+    },
+    {
+      "node_id": "n7",
+      "name": "验证反馈闭环",
+      "definition": "对 AI 结构化输出做自动检查、标记、回退或修复。",
+      "difficulty": 4,
+      "review_status": "verified",
+      "evidence_count": 2,
+      "source_count": 2
+    }
+  ],
+  "learning_path_preview": [
+    {
+      "order": 1,
+      "node_id": "n2",
+      "title": "Agent 工作流",
+      "reason": "需要先理解：上下文管理, 外部工具调用",
+      "difficulty": 2,
+      "evidence_refs": [
+        "e2",
+        "e5"
+      ],
+      "status": "verified"
+    },
+    {
+      "order": 2,
+      "node_id": "n5",
+      "title": "证据时间点回链",
+      "reason": "需要先理解：Agent 工作流, 上下文管理, 外部工具调用",
+      "difficulty": 2,
+      "evidence_refs": [
+        "e8",
+        "e12"
+      ],
+      "status": "verified"
+    },
+    {
+      "order": 3,
+      "node_id": "n1",
+      "title": "Harness Engineering",
+      "reason": "需要先理解：Agent 工作流, 上下文管理, 外部工具调用",
+      "difficulty": 3,
+      "evidence_refs": [
+        "e1",
+        "e16"
+      ],
+      "status": "verified"
+    },
+    {
+      "order": 4,
+      "node_id": "n3",
+      "title": "上下文管理",
+      "reason": "需要先理解：Agent 工作流, 外部工具调用",
+      "difficulty": 3,
+      "evidence_refs": [
+        "e3",
+        "e6"
+      ],
+      "status": "verified"
+    },
+    {
+      "order": 5,
+      "node_id": "n4",
+      "title": "外部工具调用",
+      "reason": "需要先理解：Agent 工作流, 上下文管理",
+      "difficulty": 3,
+      "evidence_refs": [
+        "e4",
+        "e7"
+      ],
+      "status": "verified"
+    }
+  ],
+  "validation_banner": {
+    "passed": true,
+    "warning_count": 0,
+    "error_count": 0,
+    "uncovered_learning_steps": 0
+  },
+  "generated_at": "2026-04-21T19:07:36.620690+00:00"
+}

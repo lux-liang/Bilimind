@@ -25,6 +25,14 @@
     {
       "name": "learning_path_references_existing_nodes",
       "passed": true
+    },
+    {
+      "name": "learning_path_evidence_refs_valid",
+      "passed": true
+    },
+    {
+      "name": "renderable_evidence_packets_exist",
+      "passed": true
     }
   ],
   "errors": [],
@@ -33,7 +41,9 @@
     "error_count": 0,
     "warning_count": 0,
     "low_confidence_nodes": 0,
-    "validated_evidence_links": 19
+    "validated_evidence_links": 19,
+    "evidence_packet_count": 19,
+    "uncovered_learning_steps": 0
   },
-  "generated_at": "2026-04-21T11:41:55.028565+00:00"
+  "generated_at": "2026-04-21T19:07:36.620441+00:00"
 }

@@ -13,7 +13,9 @@ const STAGE_LABELS: Record<string, string> = {
   merge: "4. 实体去重归并",
   graph: "5. 知识树构建",
   plan: "6. 学习路径生成",
-  validate: "7. 验证反馈闭环",
+  evidence: "7. 证据绑定回链",
+  validate: "8. 验证反馈闭环",
+  render: "9. 前端展示包生成",
   extract_merge: "抽取与归并",
 };
 
@@ -64,9 +66,21 @@ export default function HarnessPanel({ result }: HarnessPanelProps) {
           <p>知识点必须能回链到视频时间片段。</p>
         </div>
         <div className="harness-card">
+          <span>学习路径覆盖</span>
+          <strong>
+            {harness.stats?.covered_learning_steps ?? 0}/{result.learning_path?.total_steps ?? 0}
+          </strong>
+          <p>学习步骤是否都绑定到了可追溯证据。</p>
+        </div>
+        <div className="harness-card">
           <span>待确认节点</span>
           <strong>{harness.validation?.summary?.low_confidence_nodes ?? 0}</strong>
           <p>低置信度不伪装成确定结论，而是进入 review 状态。</p>
+        </div>
+        <div className="harness-card">
+          <span>Render Bundle</span>
+          <strong>{harness.stats?.render_timeline_count ?? 0}</strong>
+          <p>最终展示层只消费已验证的结构化产物。</p>
         </div>
       </section>
 

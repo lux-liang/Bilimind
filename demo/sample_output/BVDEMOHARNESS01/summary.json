@@ -11,15 +11,17 @@
     "claim_count": 19,
     "edge_count": 18,
     "evidence_count": 19,
+    "evidence_packet_count": 19,
     "learning_step_count": 7,
-    "validation_warning_count": 0
+    "validation_warning_count": 0,
+    "render_timeline_count": 5
   },
   "harness": {
     "pipeline_version": "harness-0.1",
     "datasource": "sample",
     "transcript_source": "sample",
     "validation_passed": true,
-    "stage_count": 7,
+    "stage_count": 9,
     "stages": [
       {
         "name": "ingest",
@@ -28,7 +30,7 @@
         "input_summary": "bvid=BVDEMOHARNESS01, datasource=sample",
         "output_summary": "metadata for BVDEMOHARNESS01 from sample",
         "warnings": [],
-        "artifact": "/home/lux_liang/work/Bilimind/demo/sample_output/BVDEMOHARNESS01/raw_metadata.json"
+        "artifact": "demo/sample_output/BVDEMOHARNESS01/raw_metadata.json"
       },
       {
         "name": "transcript",
@@ -37,7 +39,7 @@
         "input_summary": "bvid=BVDEMOHARNESS01, transcript_source=sample",
         "output_summary": "5 transcript segments",
         "warnings": [],
-        "artifact": "/home/lux_liang/work/Bilimind/demo/sample_output/BVDEMOHARNESS01/raw_transcript.json"
+        "artifact": "demo/sample_output/BVDEMOHARNESS01/raw_transcript.json"
       },
       {
         "name": "extract",
@@ -46,16 +48,16 @@
         "input_summary": "5 timestamped transcript segments",
         "output_summary": "19 concepts, 21 claims",
         "warnings": [],
-        "artifact": "/home/lux_liang/work/Bilimind/demo/sample_output/BVDEMOHARNESS01/extracted_nodes.json"
+        "artifact": "demo/sample_output/BVDEMOHARNESS01/extracted_nodes.json"
       },
       {
         "name": "merge",
         "status": "completed",
-        "duration_ms": 0,
+        "duration_ms": 1,
         "input_summary": "19 concept candidates, 21 claim candidates",
         "output_summary": "7 deduped nodes, 19 grounded claims",
         "warnings": [],
-        "artifact": "/home/lux_liang/work/Bilimind/demo/sample_output/BVDEMOHARNESS01/merged_nodes.json"
+        "artifact": "demo/sample_output/BVDEMOHARNESS01/merged_nodes.json"
       },
       {
         "name": "graph",
@@ -64,7 +66,7 @@
         "input_summary": "7 merged nodes, 19 grounded claims",
         "output_summary": "7 nodes, 18 edges, 19 evidence links",
         "warnings": [],
-        "artifact": "/home/lux_liang/work/Bilimind/demo/sample_output/BVDEMOHARNESS01/merged_graph.json"
+        "artifact": "demo/sample_output/BVDEMOHARNESS01/merged_graph.json"
       },
       {
         "name": "plan",
@@ -73,18 +75,36 @@
         "input_summary": "7 graph nodes, 18 graph edges",
         "output_summary": "7 learning steps",
         "warnings": [],
-        "artifact": "/home/lux_liang/work/Bilimind/demo/sample_output/BVDEMOHARNESS01/learning_path.json"
+        "artifact": "demo/sample_output/BVDEMOHARNESS01/learning_path.json"
+      },
+      {
+        "name": "evidence",
+        "status": "completed",
+        "duration_ms": 0,
+        "input_summary": "19 claims, 19 raw evidence links",
+        "output_summary": "19 evidence packets, 7 covered learning steps",
+        "warnings": [],
+        "artifact": "demo/sample_output/BVDEMOHARNESS01/evidence_map.json"
       },
       {
         "name": "validate",
         "status": "completed",
         "duration_ms": 0,
-        "input_summary": "raw_transcript + merged_graph + learning_path",
+        "input_summary": "raw_transcript + merged_graph + learning_path + evidence_map",
         "output_summary": "passed=True, errors=0, warnings=0",
         "warnings": [],
-        "artifact": "/home/lux_liang/work/Bilimind/demo/sample_output/BVDEMOHARNESS01/validation_report.json"
+        "artifact": "demo/sample_output/BVDEMOHARNESS01/validation_report.json"
+      },
+      {
+        "name": "render",
+        "status": "completed",
+        "duration_ms": 0,
+        "input_summary": "validated graph + evidence bundle for workspace UI",
+        "output_summary": "5 timeline segments, 7 concept cards",
+        "warnings": [],
+        "artifact": "demo/sample_output/BVDEMOHARNESS01/render_bundle.json"
       }
     ]
   },
-  "generated_at": "2026-04-21T11:41:55.028751+00:00"
+  "generated_at": "2026-04-21T19:07:36.621421+00:00"
 }

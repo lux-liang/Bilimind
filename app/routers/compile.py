@@ -399,6 +399,8 @@ def _demo_pipeline_to_compile_result(result: dict) -> dict:
     validation = result["validation_report"]
     trace = result["pipeline_trace"]
     video = graph["video"]
+    evidence_map = result.get("evidence_map", {})
+    render_bundle = result.get("render_bundle", {})
 
     claims_by_node: dict[str, list[dict]] = {}
     for idx, claim in enumerate(graph.get("claims", []), start=1):
@@ -487,6 +489,10 @@ def _demo_pipeline_to_compile_result(result: dict) -> dict:
             "artifact_dir": result.get("artifact_dir"),
             "stages": trace.get("stages", []),
             "validation": validation,
-            "stats": summary.get("stats", {}),
+            "stats": {
+                **summary.get("stats", {}),
+                "covered_learning_steps": evidence_map.get("summary", {}).get("step_coverage_count", 0),
+                "render_timeline_count": len(render_bundle.get("timeline", [])),
+            },
         },
     }

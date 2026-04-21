@@ -748,6 +748,8 @@ export interface CompileResult {
         warning_count?: number;
         low_confidence_nodes?: number;
         validated_evidence_links?: number;
+        evidence_packet_count?: number;
+        uncovered_learning_steps?: number;
       };
     };
     stats?: Record<string, number>;

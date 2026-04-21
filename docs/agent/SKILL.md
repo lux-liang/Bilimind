@@ -1,9 +1,9 @@
 # BiliMind Harness Agent Skill
 
 This skill defines how BiliMind turns messy saved videos into a verified
-knowledge navigation artifact. It is intentionally stage-based: each agent stage
-reads only the minimal context it needs and writes a JSON artifact that the next
-stage can validate.
+knowledge navigation artifact. It is intentionally stage-based: each stage
+reads only the minimal context it needs, writes a JSON artifact, and exposes
+deterministic checks before the next stage runs.
 
 ## Goal
 
@@ -15,6 +15,7 @@ produce:
 - A dependency graph
 - A learning path
 - A validation report that flags low-confidence or broken outputs
+- A render bundle that the frontend can display without hidden model state
 
 ## Context Budget Rules
 
@@ -25,6 +26,8 @@ produce:
 - Merge only normalized concept candidates, claim summaries, and evidence IDs.
 - Planning stages read graph summaries and evidence summaries, not raw full text.
 - Validation reads all structured artifacts, but does not call the LLM.
+- Render reads validated graph/evidence bundles only; it never re-reads raw
+  transcript in full.
 
 ## Stage Contracts
 
@@ -86,7 +89,7 @@ Input:
 
 Output:
 
-- `merged_graph.json`
+- `merged_nodes.json`
 
 Rules:
 
@@ -103,7 +106,7 @@ Input:
 
 Output:
 
-- Graph section inside `merged_graph.json`
+- `merged_graph.json`
 
 Rules:
 
@@ -128,7 +131,26 @@ Rules:
 - Each step must include a reason and at least one evidence pointer when
   available.
 
-### 7. validate
+### 7. evidence
+
+Input:
+
+- `merged_graph.json`
+- `learning_path.json`
+- segment-level transcript metadata
+
+Output:
+
+- `evidence_map.json`
+
+Rules:
+
+- Every evidence packet must preserve `node_id`, `claim_id`, `segment_index`,
+  `start_time`, `end_time`, and a text preview.
+- Learning path steps should be mapped to evidence packet IDs where available.
+- If a step has no evidence, keep the step but mark it as uncovered for review.
+
+### 8. validate
 
 Input:
 
@@ -145,7 +167,29 @@ Rules:
 - Check missing evidence.
 - Check timestamp ranges.
 - Check graph edges and learning path cycles.
+- Check learning-path-to-evidence references.
 - Return `passed=false` if blocking errors exist; otherwise flag warnings.
+
+### 9. render
+
+Input:
+
+- `merged_graph.json`
+- `learning_path.json`
+- `evidence_map.json`
+- `validation_report.json`
+
+Output:
+
+- `render_bundle.json`
+
+Rules:
+
+- Render bundle must be derivable from prior artifacts with no hidden model
+  memory.
+- Include timeline density, concept cards, and a validation banner.
+- If validation fails, render bundle may still exist for debugging/demo, but
+  must preserve the failure state.
 
 ## Failure Strategy
 
@@ -153,3 +197,4 @@ Rules:
 - Prefer fallback artifacts with explicit warnings over empty UI states.
 - Low confidence does not hide data; it marks nodes as `needs_review`.
 - Validation is deterministic and runs without network access.
+- Render is deterministic and must not silently repair validation failures.

@@ -1,0 +1,17 @@
+{
+  "bvid": "BVDEMOHARNESS01",
+  "datasource": "sample",
+  "transcript_source": "sample",
+  "goal": "把收藏视频编译成可浏览知识树、学习路径和时间点证据链",
+  "expected_pipeline": [
+    "ingest",
+    "transcript",
+    "extract",
+    "merge",
+    "graph",
+    "plan",
+    "evidence",
+    "validate",
+    "render"
+  ]
+}

@@ -34,7 +34,9 @@ STAGE_ORDER = [
     "merge",
     "graph",
     "plan",
+    "evidence",
     "validate",
+    "render",
 ]
 
 
@@ -99,6 +101,13 @@ def _write_json(path: Path, data: Any) -> None:
 def _read_json(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _path_ref(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
 
 
 class SampleHarnessTool:
@@ -222,32 +231,63 @@ class HarnessPipeline:
         traces.append(trace)
         stage_outputs["learning_path"] = learning_path
 
+        evidence_map, trace = self._run_stage(
+            "evidence",
+            lambda: self._stage_evidence(metadata, transcript, graph, learning_path),
+            input_summary=(
+                f"{len(graph.get('claims', []))} claims, "
+                f"{len(graph.get('evidence_links', []))} raw evidence links"
+            ),
+            artifact_path=run_dir / "evidence_map.json",
+        )
+        traces.append(trace)
+        stage_outputs["evidence_map"] = evidence_map
+
         validation, trace = self._run_stage(
             "validate",
-            lambda: self._stage_validate(metadata, transcript, graph, learning_path),
-            input_summary="raw_transcript + merged_graph + learning_path",
+            lambda: self._stage_validate(metadata, transcript, graph, learning_path, evidence_map),
+            input_summary="raw_transcript + merged_graph + learning_path + evidence_map",
             artifact_path=run_dir / "validation_report.json",
         )
         traces.append(trace)
         stage_outputs["validation_report"] = validation
 
+        render_bundle, trace = self._run_stage(
+            "render",
+            lambda: self._stage_render(graph, transcript, learning_path, evidence_map, validation),
+            input_summary="validated graph + evidence bundle for workspace UI",
+            artifact_path=run_dir / "render_bundle.json",
+        )
+        traces.append(trace)
+        stage_outputs["render_bundle"] = render_bundle
+
         pipeline_trace = {
             "pipeline_version": PIPELINE_VERSION,
             "run_id": run_id,
             "generated_at": _utc_now(),
-            "artifact_dir": str(run_dir),
+            "artifact_dir": _path_ref(run_dir, self.root),
             "datasource": metadata.get("datasource"),
             "transcript_source": transcript.get("source"),
+            "stage_order": STAGE_ORDER,
             "stages": [trace.to_dict() for trace in traces],
         }
         _write_json(run_dir / "pipeline_trace.json", pipeline_trace)
 
-        summary = self._build_summary(metadata, transcript, graph, learning_path, validation, traces)
+        summary = self._build_summary(
+            metadata,
+            transcript,
+            graph,
+            learning_path,
+            evidence_map,
+            validation,
+            render_bundle,
+            traces,
+        )
         _write_json(run_dir / "summary.json", summary)
 
         result = {
             "run_id": run_id,
-            "artifact_dir": str(run_dir),
+            "artifact_dir": _path_ref(run_dir, self.root),
             "summary": summary,
             "pipeline_trace": pipeline_trace,
             **stage_outputs,
@@ -297,7 +337,7 @@ class HarnessPipeline:
             input_summary=input_summary,
             output_summary=output_summary,
             warnings=warnings,
-            artifact=str(artifact_path) if artifact_path else None,
+            artifact=_path_ref(artifact_path, self.root) if artifact_path else None,
         )
 
     def _stage_ingest(self, bvid: str, datasource: str) -> dict[str, Any]:
@@ -711,12 +751,79 @@ class HarnessPipeline:
             "generated_at": _utc_now(),
         }
 
+    def _stage_evidence(
+        self,
+        metadata: dict[str, Any],
+        transcript: dict[str, Any],
+        graph: dict[str, Any],
+        learning_path: dict[str, Any],
+    ) -> dict[str, Any]:
+        segments = {segment["segment_index"]: segment for segment in transcript.get("segments", [])}
+        claims = {claim["id"]: claim for claim in graph.get("claims", [])}
+        nodes = {node["id"]: node for node in graph.get("nodes", [])}
+        evidence_packets = []
+
+        for evidence in graph.get("evidence_links", []):
+            segment = segments.get(evidence["segment_index"], {})
+            claim = claims.get(evidence["claim_id"], {})
+            node = nodes.get(evidence["node_id"], {})
+            text_preview = (segment.get("raw_text") or "").strip()[:180]
+            evidence_packets.append({
+                "id": evidence["id"],
+                "node_id": evidence["node_id"],
+                "node_name": node.get("name", ""),
+                "claim_id": evidence["claim_id"],
+                "claim_statement": claim.get("statement", ""),
+                "bvid": metadata["bvid"],
+                "segment_index": evidence["segment_index"],
+                "start_time": evidence["start_time"],
+                "end_time": evidence["end_time"],
+                "time": evidence["time"],
+                "segment_source_type": segment.get("source_type", "unknown"),
+                "segment_confidence": segment.get("confidence", 0.0),
+                "evidence_confidence": evidence.get("confidence", 0.0),
+                "text_preview": text_preview,
+                "trace_url": f"{metadata.get('source_url', '')}#t={int(evidence['start_time'])}",
+            })
+
+        coverage = []
+        evidence_by_node: dict[str, list[dict[str, Any]]] = {}
+        for item in evidence_packets:
+            evidence_by_node.setdefault(item["node_id"], []).append(item)
+
+        for step in learning_path.get("steps", []):
+            linked = evidence_by_node.get(step["node_id"], [])
+            coverage.append({
+                "node_id": step["node_id"],
+                "title": step["title"],
+                "step_order": step["order"],
+                "evidence_count": len(linked),
+                "evidence_refs": [item["id"] for item in linked[:3]],
+                "has_traceable_evidence": bool(linked),
+                "status": step["status"],
+            })
+
+        return {
+            "stage": "evidence",
+            "contract": "all learning steps should map to timestamped evidence packets when available",
+            "source_adapter": "sample_transcript" if transcript.get("source") == "sample" else transcript.get("source"),
+            "evidence_packets": evidence_packets,
+            "coverage": coverage,
+            "summary": {
+                "packet_count": len(evidence_packets),
+                "step_coverage_count": sum(1 for item in coverage if item["has_traceable_evidence"]),
+                "uncovered_step_count": sum(1 for item in coverage if not item["has_traceable_evidence"]),
+            },
+            "generated_at": _utc_now(),
+        }
+
     def _stage_validate(
         self,
         metadata: dict[str, Any],
         transcript: dict[str, Any],
         graph: dict[str, Any],
         learning_path: dict[str, Any],
+        evidence_map: dict[str, Any],
     ) -> dict[str, Any]:
         errors: list[dict[str, str]] = []
         warnings: list[dict[str, str]] = []
@@ -769,6 +876,25 @@ class HarnessPipeline:
             if node_id not in node_ids:
                 errors.append({"code": "broken_path_step", "message": f"path step points to missing node {node_id}"})
 
+        evidence_packets = evidence_map.get("evidence_packets", [])
+        evidence_packet_ids = {item.get("id") for item in evidence_packets}
+        uncovered_steps = 0
+        for step in learning_path.get("steps", []):
+            if not step.get("evidence_refs"):
+                warnings.append({"code": "step_missing_evidence_ref", "message": f"learning step {step.get('title')} has no evidence_refs"})
+            missing_refs = [ref for ref in step.get("evidence_refs", []) if ref not in evidence_packet_ids]
+            if missing_refs:
+                errors.append({
+                    "code": "broken_step_evidence_ref",
+                    "message": f"learning step {step.get('title')} points to missing evidence refs: {', '.join(missing_refs)}",
+                })
+            if not any(item.get("node_id") == step.get("node_id") for item in evidence_packets):
+                uncovered_steps += 1
+                warnings.append({
+                    "code": "step_without_traceable_evidence",
+                    "message": f"learning step {step.get('title')} has no timestamped evidence packet",
+                })
+
         checks = [
             {"name": "metadata_has_bvid", "passed": bool(metadata.get("bvid"))},
             {"name": "transcript_has_segments", "passed": bool(segments)},
@@ -776,6 +902,8 @@ class HarnessPipeline:
             {"name": "edges_reference_existing_nodes", "passed": not any(e["code"] == "broken_edge" for e in errors)},
             {"name": "evidence_timestamps_valid", "passed": not any(e["code"] == "invalid_timestamp" for e in errors)},
             {"name": "learning_path_references_existing_nodes", "passed": not any(e["code"] == "broken_path_step" for e in errors)},
+            {"name": "learning_path_evidence_refs_valid", "passed": not any(e["code"] == "broken_step_evidence_ref" for e in errors)},
+            {"name": "renderable_evidence_packets_exist", "passed": bool(evidence_packets)},
         ]
 
         return {
@@ -789,6 +917,70 @@ class HarnessPipeline:
                 "warning_count": len(warnings),
                 "low_confidence_nodes": sum(1 for n in nodes if n.get("review_status") == "needs_review"),
                 "validated_evidence_links": len(graph.get("evidence_links", [])),
+                "evidence_packet_count": len(evidence_packets),
+                "uncovered_learning_steps": uncovered_steps,
+            },
+            "generated_at": _utc_now(),
+        }
+
+    def _stage_render(
+        self,
+        graph: dict[str, Any],
+        transcript: dict[str, Any],
+        learning_path: dict[str, Any],
+        evidence_map: dict[str, Any],
+        validation: dict[str, Any],
+    ) -> dict[str, Any]:
+        timeline_density: dict[int, int] = {}
+        concept_map: dict[int, set[str]] = {}
+        for evidence in evidence_map.get("evidence_packets", []):
+            seg_idx = evidence["segment_index"]
+            timeline_density[seg_idx] = timeline_density.get(seg_idx, 0) + 1
+            concept_map.setdefault(seg_idx, set()).add(evidence["node_name"])
+
+        max_density = max(timeline_density.values()) if timeline_density else 1
+        timeline = []
+        for segment in transcript.get("segments", []):
+            seg_idx = segment["segment_index"]
+            score = timeline_density.get(seg_idx, 0)
+            timeline.append({
+                "segment_index": seg_idx,
+                "start_time": segment["start_time"],
+                "end_time": segment["end_time"],
+                "density": round(score / max_density, 2) if max_density else 0,
+                "is_peak": bool(score and score == max_density),
+                "concepts": sorted(concept_map.get(seg_idx, set())),
+                "source_type": segment.get("source_type"),
+                "confidence": segment.get("confidence"),
+            })
+
+        node_evidence_count: dict[str, int] = {}
+        for evidence in evidence_map.get("evidence_packets", []):
+            node_evidence_count[evidence["node_id"]] = node_evidence_count.get(evidence["node_id"], 0) + 1
+
+        concept_cards = []
+        for node in graph.get("nodes", []):
+            concept_cards.append({
+                "node_id": node["id"],
+                "name": node["name"],
+                "definition": node.get("definition", ""),
+                "difficulty": node.get("difficulty", 1),
+                "review_status": node.get("review_status", "needs_review"),
+                "evidence_count": node_evidence_count.get(node["id"], 0),
+                "source_count": node.get("source_count", 1),
+            })
+
+        return {
+            "stage": "render",
+            "workspace_bundle_version": "workspace-harness-1",
+            "timeline": timeline,
+            "concept_cards": concept_cards,
+            "learning_path_preview": learning_path.get("steps", [])[:5],
+            "validation_banner": {
+                "passed": validation.get("passed", False),
+                "warning_count": validation.get("summary", {}).get("warning_count", 0),
+                "error_count": validation.get("summary", {}).get("error_count", 0),
+                "uncovered_learning_steps": validation.get("summary", {}).get("uncovered_learning_steps", 0),
             },
             "generated_at": _utc_now(),
         }
@@ -799,7 +991,9 @@ class HarnessPipeline:
         transcript: dict[str, Any],
         graph: dict[str, Any],
         learning_path: dict[str, Any],
+        evidence_map: dict[str, Any],
         validation: dict[str, Any],
+        render_bundle: dict[str, Any],
         traces: list[StageTrace],
     ) -> dict[str, Any]:
         return {
@@ -815,8 +1009,10 @@ class HarnessPipeline:
                 "claim_count": len(graph.get("claims", [])),
                 "edge_count": len(graph.get("edges", [])),
                 "evidence_count": len(graph.get("evidence_links", [])),
+                "evidence_packet_count": len(evidence_map.get("evidence_packets", [])),
                 "learning_step_count": len(learning_path.get("steps", [])),
                 "validation_warning_count": validation.get("summary", {}).get("warning_count", 0),
+                "render_timeline_count": len(render_bundle.get("timeline", [])),
             },
             "harness": {
                 "pipeline_version": PIPELINE_VERSION,
@@ -854,11 +1050,21 @@ class HarnessPipeline:
             )
         if name == "plan":
             return f"{len(data.get('steps', []))} learning steps"
+        if name == "evidence":
+            return (
+                f"{len(data.get('evidence_packets', []))} evidence packets, "
+                f"{data.get('summary', {}).get('step_coverage_count', 0)} covered learning steps"
+            )
         if name == "validate":
             return (
                 f"passed={data.get('passed')}, "
                 f"errors={len(data.get('errors', []))}, "
                 f"warnings={len(data.get('warnings', []))}"
+            )
+        if name == "render":
+            return (
+                f"{len(data.get('timeline', []))} timeline segments, "
+                f"{len(data.get('concept_cards', []))} concept cards"
             )
         return "completed"
 
