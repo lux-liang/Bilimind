@@ -1,0 +1,90 @@
+{
+  "video": {
+    "bvid": "BVDEMOHARNESS01",
+    "title": "3 分钟理解 Harness Engineering：从 Prompt 到可验证 AI 工作流",
+    "duration": 360,
+    "source_url": "https://www.bilibili.com/video/BVDEMOHARNESS01"
+  },
+  "stats": {
+    "segment_count": 5,
+    "node_count": 7,
+    "claim_count": 19,
+    "edge_count": 18,
+    "evidence_count": 19,
+    "learning_step_count": 7,
+    "validation_warning_count": 0
+  },
+  "harness": {
+    "pipeline_version": "harness-0.1",
+    "datasource": "sample",
+    "transcript_source": "sample",
+    "validation_passed": true,
+    "stage_count": 7,
+    "stages": [
+      {
+        "name": "ingest",
+        "status": "completed",
+        "duration_ms": 0,
+        "input_summary": "bvid=BVDEMOHARNESS01, datasource=sample",
+        "output_summary": "metadata for BVDEMOHARNESS01 from sample",
+        "warnings": [],
+        "artifact": "/home/lux_liang/work/Bilimind/demo/sample_output/BVDEMOHARNESS01/raw_metadata.json"
+      },
+      {
+        "name": "transcript",
+        "status": "completed",
+        "duration_ms": 0,
+        "input_summary": "bvid=BVDEMOHARNESS01, transcript_source=sample",
+        "output_summary": "5 transcript segments",
+        "warnings": [],
+        "artifact": "/home/lux_liang/work/Bilimind/demo/sample_output/BVDEMOHARNESS01/raw_transcript.json"
+      },
+      {
+        "name": "extract",
+        "status": "completed",
+        "duration_ms": 1,
+        "input_summary": "5 timestamped transcript segments",
+        "output_summary": "19 concepts, 21 claims",
+        "warnings": [],
+        "artifact": "/home/lux_liang/work/Bilimind/demo/sample_output/BVDEMOHARNESS01/extracted_nodes.json"
+      },
+      {
+        "name": "merge",
+        "status": "completed",
+        "duration_ms": 0,
+        "input_summary": "19 concept candidates, 21 claim candidates",
+        "output_summary": "7 deduped nodes, 19 grounded claims",
+        "warnings": [],
+        "artifact": "/home/lux_liang/work/Bilimind/demo/sample_output/BVDEMOHARNESS01/merged_nodes.json"
+      },
+      {
+        "name": "graph",
+        "status": "completed",
+        "duration_ms": 0,
+        "input_summary": "7 merged nodes, 19 grounded claims",
+        "output_summary": "7 nodes, 18 edges, 19 evidence links",
+        "warnings": [],
+        "artifact": "/home/lux_liang/work/Bilimind/demo/sample_output/BVDEMOHARNESS01/merged_graph.json"
+      },
+      {
+        "name": "plan",
+        "status": "completed",
+        "duration_ms": 0,
+        "input_summary": "7 graph nodes, 18 graph edges",
+        "output_summary": "7 learning steps",
+        "warnings": [],
+        "artifact": "/home/lux_liang/work/Bilimind/demo/sample_output/BVDEMOHARNESS01/learning_path.json"
+      },
+      {
+        "name": "validate",
+        "status": "completed",
+        "duration_ms": 0,
+        "input_summary": "raw_transcript + merged_graph + learning_path",
+        "output_summary": "passed=True, errors=0, warnings=0",
+        "warnings": [],
+        "artifact": "/home/lux_liang/work/Bilimind/demo/sample_output/BVDEMOHARNESS01/validation_report.json"
+      }
+    ]
+  },
+  "generated_at": "2026-04-21T11:41:55.028751+00:00"
+}

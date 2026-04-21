@@ -67,6 +67,11 @@ export default function ConceptClaimList({ concepts }: ConceptClaimListProps) {
               {expandedConcepts.has(concept.id) ? "v" : ">"}
             </span>
             <span className="concept-name">{concept.name}</span>
+            {concept.review_status && (
+              <span className={`review-pill ${concept.review_status === "verified" ? "ok" : "warn"}`}>
+                {concept.review_status === "verified" ? "已验证" : "待确认"}
+              </span>
+            )}
             {concept.definition && (
               <span className="concept-def">
                 {concept.definition.length > 40
@@ -98,6 +103,11 @@ export default function ConceptClaimList({ concepts }: ConceptClaimListProps) {
                         {CLAIM_TYPE_LABELS[claim.type] || claim.type}
                       </span>
                       <span>置信度 {Math.round(claim.confidence * 100)}%</span>
+                      {claim.review_status && (
+                        <span className={`review-pill tiny ${claim.review_status === "verified" ? "ok" : "warn"}`}>
+                          {claim.review_status === "verified" ? "已验证" : "低置信"}
+                        </span>
+                      )}
                       <span
                         className="evidence-time"
                         onClick={(e) => {

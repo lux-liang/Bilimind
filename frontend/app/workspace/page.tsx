@@ -6,6 +6,7 @@ import UserTopbar from "@/components/UserTopbar";
 import KnowledgeTimeline from "@/components/KnowledgeTimeline";
 import ConceptClaimList from "@/components/ConceptClaimList";
 import EvidenceChat from "@/components/EvidenceChat";
+import HarnessPanel from "@/components/HarnessPanel";
 import {
   favoritesApi,
   compileApi,
@@ -24,7 +25,7 @@ const KnowledgeMap = dynamic(() => import("@/components/KnowledgeMap"), {
   ),
 });
 
-type TabKey = "timeline" | "map" | "claims";
+type TabKey = "harness" | "timeline" | "map" | "claims";
 
 interface VideoItem {
   bvid: string;
@@ -42,6 +43,7 @@ export default function WorkspacePage() {
   const [compileResult, setCompileResult] = useState<CompileResult | null>(null);
   const [compiling, setCompiling] = useState<string | null>(null);
   const [compileProgress, setCompileProgress] = useState(0);
+  const [demoLoading, setDemoLoading] = useState(false);
   const [loadingResult, setLoadingResult] = useState(false);
   const [loadingVideos, setLoadingVideos] = useState(true);
   const listRequestIdRef = useRef(0);
@@ -49,19 +51,26 @@ export default function WorkspacePage() {
   const compilePollIdRef = useRef(0);
 
   useEffect(() => {
-    setVideos([]);
-    setSelectedBvid(null);
-    setCompileResult(null);
-    setCompiling(null);
-    setCompileProgress(0);
-    setLoadingResult(false);
-    setLoadingVideos(!!sessionId);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setVideos([]);
+      setSelectedBvid(null);
+      setCompileResult(null);
+      setCompiling(null);
+      setCompileProgress(0);
+      setLoadingResult(false);
+      setLoadingVideos(!!sessionId);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [sessionId, scopeKey]);
 
   // Load videos from favorites
   useEffect(() => {
     if (!sessionId) {
-      setLoadingVideos(false);
+      queueMicrotask(() => setLoadingVideos(false));
       return;
     }
     const requestId = ++listRequestIdRef.current;
@@ -189,7 +198,34 @@ export default function WorkspacePage() {
     return `${m}:${String(s).padStart(2, "0")}`;
   };
 
+  const handleRunDemo = async () => {
+    setDemoLoading(true);
+    setSelectedBvid("BVDEMOHARNESS01");
+    setCompileResult(null);
+    setActiveTab("harness");
+    try {
+      const result = await compileApi.runDemo();
+      setCompileResult(result);
+      setVideos((prev) => {
+        if (prev.some((item) => item.bvid === result.video.bvid)) return prev;
+        return [
+          {
+            bvid: result.video.bvid,
+            title: result.video.title,
+            duration: result.video.duration,
+            owner: "Sample Harness",
+            compiled: true,
+          },
+          ...prev,
+        ];
+      });
+    } finally {
+      setDemoLoading(false);
+    }
+  };
+
   const tabs: { key: TabKey; label: string }[] = [
+    { key: "harness", label: "Harness" },
     { key: "timeline", label: "时间轴" },
     { key: "map", label: "知识图" },
     { key: "claims", label: "论断" },
@@ -224,6 +260,11 @@ export default function WorkspacePage() {
         <div className="topbar-actions">
           {compileResult && (
             <div className="topbar-stats">
+              {compileResult.harness && (
+                <span className={`topbar-stat ${compileResult.harness.validation_passed ? "" : "danger"}`}>
+                  <strong>{compileResult.harness.validation_passed ? "OK" : "WARN"}</strong> 校验
+                </span>
+              )}
               <span className="topbar-stat">
                 <strong>{compileResult.stats.concept_count}</strong> 概念
               </span>
@@ -257,6 +298,17 @@ export default function WorkspacePage() {
                 }}
               >
                 视频列表
+              </div>
+              <button
+                className="compile-btn demo"
+                onClick={handleRunDemo}
+                disabled={demoLoading}
+                style={{ marginBottom: 12 }}
+              >
+                {demoLoading ? "运行 sample pipeline..." : "运行 Harness Demo"}
+              </button>
+              <div className="workspace-hint">
+                无需登录：读取 sample transcript，输出 artifacts 和校验报告。
               </div>
 
               {loadingVideos ? (
@@ -371,11 +423,14 @@ export default function WorkspacePage() {
                     </div>
                     <h3 className="placeholder-title">视频尚未编译</h3>
                     <p className="placeholder-desc">
-                      点击左侧的"编译此视频"按钮，AI 将自动提取知识结构
+                      点击左侧的“编译此视频”按钮，AI 将自动提取知识结构
                     </p>
                   </div>
                 ) : (
                   <>
+                    {activeTab === "harness" && (
+                      <HarnessPanel result={compileResult} />
+                    )}
                     {activeTab === "timeline" && (
                       <KnowledgeTimeline
                         timeline={compileResult.timeline}

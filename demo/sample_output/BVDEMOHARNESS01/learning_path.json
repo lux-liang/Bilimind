@@ -1,0 +1,94 @@
+{
+  "stage": "plan",
+  "prompt_contract": "prompts/plan_learning_path.md",
+  "target": "3 分钟理解 Harness Engineering：从 Prompt 到可验证 AI 工作流",
+  "mode": "standard",
+  "steps": [
+    {
+      "order": 1,
+      "node_id": "n2",
+      "title": "Agent 工作流",
+      "reason": "需要先理解：上下文管理, 外部工具调用",
+      "difficulty": 2,
+      "evidence_refs": [
+        "e2",
+        "e5"
+      ],
+      "status": "verified"
+    },
+    {
+      "order": 2,
+      "node_id": "n5",
+      "title": "证据时间点回链",
+      "reason": "需要先理解：Agent 工作流, 上下文管理, 外部工具调用",
+      "difficulty": 2,
+      "evidence_refs": [
+        "e8",
+        "e12"
+      ],
+      "status": "verified"
+    },
+    {
+      "order": 3,
+      "node_id": "n1",
+      "title": "Harness Engineering",
+      "reason": "需要先理解：Agent 工作流, 上下文管理, 外部工具调用",
+      "difficulty": 3,
+      "evidence_refs": [
+        "e1",
+        "e16"
+      ],
+      "status": "verified"
+    },
+    {
+      "order": 4,
+      "node_id": "n3",
+      "title": "上下文管理",
+      "reason": "需要先理解：Agent 工作流, 外部工具调用",
+      "difficulty": 3,
+      "evidence_refs": [
+        "e3",
+        "e6"
+      ],
+      "status": "verified"
+    },
+    {
+      "order": 5,
+      "node_id": "n4",
+      "title": "外部工具调用",
+      "reason": "需要先理解：Agent 工作流, 上下文管理",
+      "difficulty": 3,
+      "evidence_refs": [
+        "e4",
+        "e7"
+      ],
+      "status": "verified"
+    },
+    {
+      "order": 6,
+      "node_id": "n6",
+      "title": "学习路径生成",
+      "reason": "需要先理解：Agent 工作流, 上下文管理, 外部工具调用",
+      "difficulty": 3,
+      "evidence_refs": [
+        "e9",
+        "e15"
+      ],
+      "status": "verified"
+    },
+    {
+      "order": 7,
+      "node_id": "n7",
+      "title": "验证反馈闭环",
+      "reason": "需要先理解：Agent 工作流, 上下文管理, 外部工具调用",
+      "difficulty": 4,
+      "evidence_refs": [
+        "e13",
+        "e18"
+      ],
+      "status": "verified"
+    }
+  ],
+  "total_steps": 7,
+  "generated_at": "2026-04-21T11:41:55.028427+00:00"
+}

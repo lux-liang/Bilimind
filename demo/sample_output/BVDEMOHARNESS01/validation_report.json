@@ -1,0 +1,39 @@
+{
+  "stage": "validate",
+  "passed": true,
+  "checks": [
+    {
+      "name": "metadata_has_bvid",
+      "passed": true
+    },
+    {
+      "name": "transcript_has_segments",
+      "passed": true
+    },
+    {
+      "name": "deduplicated_node_names",
+      "passed": true
+    },
+    {
+      "name": "edges_reference_existing_nodes",
+      "passed": true
+    },
+    {
+      "name": "evidence_timestamps_valid",
+      "passed": true
+    },
+    {
+      "name": "learning_path_references_existing_nodes",
+      "passed": true
+    }
+  ],
+  "errors": [],
+  "warnings": [],
+  "summary": {
+    "error_count": 0,
+    "warning_count": 0,
+    "low_confidence_nodes": 0,
+    "validated_evidence_links": 19
+  },
+  "generated_at": "2026-04-21T11:41:55.028565+00:00"
+}

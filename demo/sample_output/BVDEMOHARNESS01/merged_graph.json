@@ -1,0 +1,718 @@
+{
+  "stage": "graph",
+  "prompt_contract": "prompts/build_graph.md",
+  "video": {
+    "bvid": "BVDEMOHARNESS01",
+    "title": "3 分钟理解 Harness Engineering：从 Prompt 到可验证 AI 工作流",
+    "duration": 360,
+    "source_url": "https://www.bilibili.com/video/BVDEMOHARNESS01"
+  },
+  "nodes": [
+    {
+      "id": "n1",
+      "name": "Harness Engineering",
+      "normalized_name": "harness engineering",
+      "aliases": [
+        "Harness Engineering"
+      ],
+      "definition": "把 AI 能力封装进可观测、可验证、可回放工作流的工程方法。",
+      "difficulty": 3,
+      "confidence": 0.81,
+      "source_count": 2,
+      "review_status": "verified"
+    },
+    {
+      "id": "n2",
+      "name": "Agent 工作流",
+      "normalized_name": "agent 工作流",
+      "aliases": [
+        "Agent 工作流"
+      ],
+      "definition": "把复杂 AI 任务拆成多个有输入输出契约的执行阶段。",
+      "difficulty": 2,
+      "confidence": 0.78,
+      "source_count": 3,
+      "review_status": "verified"
+    },
+    {
+      "id": "n3",
+      "name": "上下文管理",
+      "normalized_name": "上下文管理",
+      "aliases": [
+        "上下文管理"
+      ],
+      "definition": "控制每个阶段读取的信息范围，减少长文本噪声和模型幻觉。",
+      "difficulty": 3,
+      "confidence": 0.81,
+      "source_count": 2,
+      "review_status": "verified"
+    },
+    {
+      "id": "n4",
+      "name": "外部工具调用",
+      "normalized_name": "外部工具调用",
+      "aliases": [
+        "外部工具调用"
+      ],
+      "definition": "通过 API、CLI 或本地文件获取真实数据，让模型输出有来源。",
+      "difficulty": 3,
+      "confidence": 0.81,
+      "source_count": 3,
+      "review_status": "verified"
+    },
+    {
+      "id": "n5",
+      "name": "证据时间点回链",
+      "normalized_name": "证据时间点回链",
+      "aliases": [
+        "证据时间点回链"
+      ],
+      "definition": "把知识节点和论断连接回原视频的具体时间片段。",
+      "difficulty": 2,
+      "confidence": 0.78,
+      "source_count": 4,
+      "review_status": "verified"
+    },
+    {
+      "id": "n6",
+      "name": "学习路径生成",
+      "normalized_name": "学习路径生成",
+      "aliases": [
+        "学习路径生成"
+      ],
+      "definition": "根据前置关系、难度和证据覆盖生成可执行学习顺序。",
+      "difficulty": 3,
+      "confidence": 0.78,
+      "source_count": 3,
+      "review_status": "verified"
+    },
+    {
+      "id": "n7",
+      "name": "验证反馈闭环",
+      "normalized_name": "验证反馈闭环",
+      "aliases": [
+        "验证反馈闭环"
+      ],
+      "definition": "对 AI 结构化输出做自动检查、标记、回退或修复。",
+      "difficulty": 4,
+      "confidence": 0.81,
+      "source_count": 2,
+      "review_status": "verified"
+    }
+  ],
+  "claims": [
+    {
+      "id": "c1",
+      "node_id": "n1",
+      "concept": "Harness Engineering",
+      "statement": "Harness Engineering 的第一步不是直接问大模型，而是把任务拆成可控的工作流：先拿到视频元数据，再获取字幕，再把长文本切成带时间戳的片段",
+      "type": "explanation",
+      "confidence": 0.76,
+      "segment_index": 0,
+      "time": "0:00-1:10",
+      "start_time": 0.0,
+      "end_time": 70.0,
+      "raw_text": "很多人把课程视频收藏到 B 站以后就再也找不到重点了。Harness Engineering 的第一步不是直接问大模型，而是把任务拆成可控的工作流：先拿到视频元数据，再获取字幕，再把长文本切成带时间戳的片段。"
+    },
+    {
+      "id": "c2",
+      "node_id": "n2",
+      "concept": "Agent 工作流",
+      "statement": "很多人把课程视频收藏到 B 站以后就再也找不到重点了。Harness Engineering 的第一步不是直接问大模型，而是把任务拆成可控的工作流：先拿到视频元数据，再获取字幕，再把长文本切成带时间戳的片段。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 0,
+      "time": "0:00-1:10",
+      "start_time": 0.0,
+      "end_time": 70.0,
+      "raw_text": "很多人把课程视频收藏到 B 站以后就再也找不到重点了。Harness Engineering 的第一步不是直接问大模型，而是把任务拆成可控的工作流：先拿到视频元数据，再获取字幕，再把长文本切成带时间戳的片段。"
+    },
+    {
+      "id": "c3",
+      "node_id": "n3",
+      "concept": "上下文管理",
+      "statement": "很多人把课程视频收藏到 B 站以后就再也找不到重点了。Harness Engineering 的第一步不是直接问大模型，而是把任务拆成可控的工作流：先拿到视频元数据，再获取字幕，再把长文本切成带时间戳的片段。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 0,
+      "time": "0:00-1:10",
+      "start_time": 0.0,
+      "end_time": 70.0,
+      "raw_text": "很多人把课程视频收藏到 B 站以后就再也找不到重点了。Harness Engineering 的第一步不是直接问大模型，而是把任务拆成可控的工作流：先拿到视频元数据，再获取字幕，再把长文本切成带时间戳的片段。"
+    },
+    {
+      "id": "c4",
+      "node_id": "n4",
+      "concept": "外部工具调用",
+      "statement": "很多人把课程视频收藏到 B 站以后就再也找不到重点了。Harness Engineering 的第一步不是直接问大模型，而是把任务拆成可控的工作流：先拿到视频元数据，再获取字幕，再把长文本切成带时间戳的片段。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 0,
+      "time": "0:00-1:10",
+      "start_time": 0.0,
+      "end_time": 70.0,
+      "raw_text": "很多人把课程视频收藏到 B 站以后就再也找不到重点了。Harness Engineering 的第一步不是直接问大模型，而是把任务拆成可控的工作流：先拿到视频元数据，再获取字幕，再把长文本切成带时间戳的片段。"
+    },
+    {
+      "id": "c5",
+      "node_id": "n2",
+      "concept": "Agent 工作流",
+      "statement": "上下文管理是关键。每个 Agent Skill 只读取自己需要的上下文，知识抽取阶段只看当前片段，图谱阶段只看结构化候选节点，学习路径阶段只看依赖关系和证据摘要。这样可以减少噪声节点，也避免把整段字幕一次性塞给模型。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 1,
+      "time": "1:10-2:25",
+      "start_time": 70.0,
+      "end_time": 145.0,
+      "raw_text": "上下文管理是关键。每个 Agent Skill 只读取自己需要的上下文，知识抽取阶段只看当前片段，图谱阶段只看结构化候选节点，学习路径阶段只看依赖关系和证据摘要。这样可以减少噪声节点，也避免把整段字幕一次性塞给模型。"
+    },
+    {
+      "id": "c6",
+      "node_id": "n3",
+      "concept": "上下文管理",
+      "statement": "上下文管理是关键",
+      "type": "explanation",
+      "confidence": 0.76,
+      "segment_index": 1,
+      "time": "1:10-2:25",
+      "start_time": 70.0,
+      "end_time": 145.0,
+      "raw_text": "上下文管理是关键。每个 Agent Skill 只读取自己需要的上下文，知识抽取阶段只看当前片段，图谱阶段只看结构化候选节点，学习路径阶段只看依赖关系和证据摘要。这样可以减少噪声节点，也避免把整段字幕一次性塞给模型。"
+    },
+    {
+      "id": "c7",
+      "node_id": "n4",
+      "concept": "外部工具调用",
+      "statement": "上下文管理是关键。每个 Agent Skill 只读取自己需要的上下文，知识抽取阶段只看当前片段，图谱阶段只看结构化候选节点，学习路径阶段只看依赖关系和证据摘要。这样可以减少噪声节点，也避免把整段字幕一次性塞给模型。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 1,
+      "time": "1:10-2:25",
+      "start_time": 70.0,
+      "end_time": 145.0,
+      "raw_text": "上下文管理是关键。每个 Agent Skill 只读取自己需要的上下文，知识抽取阶段只看当前片段，图谱阶段只看结构化候选节点，学习路径阶段只看依赖关系和证据摘要。这样可以减少噪声节点，也避免把整段字幕一次性塞给模型。"
+    },
+    {
+      "id": "c8",
+      "node_id": "n5",
+      "concept": "证据时间点回链",
+      "statement": "上下文管理是关键。每个 Agent Skill 只读取自己需要的上下文，知识抽取阶段只看当前片段，图谱阶段只看结构化候选节点，学习路径阶段只看依赖关系和证据摘要。这样可以减少噪声节点，也避免把整段字幕一次性塞给模型。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 1,
+      "time": "1:10-2:25",
+      "start_time": 70.0,
+      "end_time": 145.0,
+      "raw_text": "上下文管理是关键。每个 Agent Skill 只读取自己需要的上下文，知识抽取阶段只看当前片段，图谱阶段只看结构化候选节点，学习路径阶段只看依赖关系和证据摘要。这样可以减少噪声节点，也避免把整段字幕一次性塞给模型。"
+    },
+    {
+      "id": "c9",
+      "node_id": "n6",
+      "concept": "学习路径生成",
+      "statement": "上下文管理是关键。每个 Agent Skill 只读取自己需要的上下文，知识抽取阶段只看当前片段，图谱阶段只看结构化候选节点，学习路径阶段只看依赖关系和证据摘要。这样可以减少噪声节点，也避免把整段字幕一次性塞给模型。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 1,
+      "time": "1:10-2:25",
+      "start_time": 70.0,
+      "end_time": 145.0,
+      "raw_text": "上下文管理是关键。每个 Agent Skill 只读取自己需要的上下文，知识抽取阶段只看当前片段，图谱阶段只看结构化候选节点，学习路径阶段只看依赖关系和证据摘要。这样可以减少噪声节点，也避免把整段字幕一次性塞给模型。"
+    },
+    {
+      "id": "c11",
+      "node_id": "n4",
+      "concept": "外部工具调用",
+      "statement": "外部工具调用让系统不只是聊天机器人",
+      "type": "explanation",
+      "confidence": 0.76,
+      "segment_index": 2,
+      "time": "2:25-3:40",
+      "start_time": 145.0,
+      "end_time": 220.0,
+      "raw_text": "外部工具调用让系统不只是聊天机器人。BiliMind 可以通过 B 站接口读取收藏夹和视频信息，通过字幕或 ASR 工具获得 transcript，也可以在 demo 模式下读取本地 sample 数据。工具层返回的是可追溯的中间产物，而不是一句模型回答。"
+    },
+    {
+      "id": "c12",
+      "node_id": "n5",
+      "concept": "证据时间点回链",
+      "statement": "外部工具调用让系统不只是聊天机器人。BiliMind 可以通过 B 站接口读取收藏夹和视频信息，通过字幕或 ASR 工具获得 transcript，也可以在 demo 模式下读取本地 sample 数据。工具层返回的是可追溯的中间产物，而不是一句模型回答。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 2,
+      "time": "2:25-3:40",
+      "start_time": 145.0,
+      "end_time": 220.0,
+      "raw_text": "外部工具调用让系统不只是聊天机器人。BiliMind 可以通过 B 站接口读取收藏夹和视频信息，通过字幕或 ASR 工具获得 transcript，也可以在 demo 模式下读取本地 sample 数据。工具层返回的是可追溯的中间产物，而不是一句模型回答。"
+    },
+    {
+      "id": "c13",
+      "node_id": "n7",
+      "concept": "验证反馈闭环",
+      "statement": "验证反馈闭环负责拦截错误",
+      "type": "explanation",
+      "confidence": 0.76,
+      "segment_index": 3,
+      "time": "3:40-5:00",
+      "start_time": 220.0,
+      "end_time": 300.0,
+      "raw_text": "验证反馈闭环负责拦截错误。系统会检查 JSON 结构、重复知识点、缺少证据的节点、非法时间戳，以及学习路径中的环。如果一个节点只有单一来源或者置信度偏低，前端不会假装它完全可靠，而是标记为待确认。"
+    },
+    {
+      "id": "c14",
+      "node_id": "n5",
+      "concept": "证据时间点回链",
+      "statement": "验证反馈闭环负责拦截错误。系统会检查 JSON 结构、重复知识点、缺少证据的节点、非法时间戳，以及学习路径中的环。如果一个节点只有单一来源或者置信度偏低，前端不会假装它完全可靠，而是标记为待确认。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 3,
+      "time": "3:40-5:00",
+      "start_time": 220.0,
+      "end_time": 300.0,
+      "raw_text": "验证反馈闭环负责拦截错误。系统会检查 JSON 结构、重复知识点、缺少证据的节点、非法时间戳，以及学习路径中的环。如果一个节点只有单一来源或者置信度偏低，前端不会假装它完全可靠，而是标记为待确认。"
+    },
+    {
+      "id": "c15",
+      "node_id": "n6",
+      "concept": "学习路径生成",
+      "statement": "验证反馈闭环负责拦截错误。系统会检查 JSON 结构、重复知识点、缺少证据的节点、非法时间戳，以及学习路径中的环。如果一个节点只有单一来源或者置信度偏低，前端不会假装它完全可靠，而是标记为待确认。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 3,
+      "time": "3:40-5:00",
+      "start_time": 220.0,
+      "end_time": 300.0,
+      "raw_text": "验证反馈闭环负责拦截错误。系统会检查 JSON 结构、重复知识点、缺少证据的节点、非法时间戳，以及学习路径中的环。如果一个节点只有单一来源或者置信度偏低，前端不会假装它完全可靠，而是标记为待确认。"
+    },
+    {
+      "id": "c16",
+      "node_id": "n1",
+      "concept": "Harness Engineering",
+      "statement": "最终结果不是聊天窗口，而是一个可浏览的知识树、可执行的学习路径和能跳回原视频时间点的证据链。用户可以看到每个阶段的状态、输入输出摘要和校验结果，这就是面向日常学习痛点的 AI 原生 Harness 产品。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 4,
+      "time": "5:00-6:00",
+      "start_time": 300.0,
+      "end_time": 360.0,
+      "raw_text": "最终结果不是聊天窗口，而是一个可浏览的知识树、可执行的学习路径和能跳回原视频时间点的证据链。用户可以看到每个阶段的状态、输入输出摘要和校验结果，这就是面向日常学习痛点的 AI 原生 Harness 产品。"
+    },
+    {
+      "id": "c17",
+      "node_id": "n2",
+      "concept": "Agent 工作流",
+      "statement": "最终结果不是聊天窗口，而是一个可浏览的知识树、可执行的学习路径和能跳回原视频时间点的证据链。用户可以看到每个阶段的状态、输入输出摘要和校验结果，这就是面向日常学习痛点的 AI 原生 Harness 产品。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 4,
+      "time": "5:00-6:00",
+      "start_time": 300.0,
+      "end_time": 360.0,
+      "raw_text": "最终结果不是聊天窗口，而是一个可浏览的知识树、可执行的学习路径和能跳回原视频时间点的证据链。用户可以看到每个阶段的状态、输入输出摘要和校验结果，这就是面向日常学习痛点的 AI 原生 Harness 产品。"
+    },
+    {
+      "id": "c18",
+      "node_id": "n7",
+      "concept": "验证反馈闭环",
+      "statement": "最终结果不是聊天窗口，而是一个可浏览的知识树、可执行的学习路径和能跳回原视频时间点的证据链。用户可以看到每个阶段的状态、输入输出摘要和校验结果，这就是面向日常学习痛点的 AI 原生 Harness 产品。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 4,
+      "time": "5:00-6:00",
+      "start_time": 300.0,
+      "end_time": 360.0,
+      "raw_text": "最终结果不是聊天窗口，而是一个可浏览的知识树、可执行的学习路径和能跳回原视频时间点的证据链。用户可以看到每个阶段的状态、输入输出摘要和校验结果，这就是面向日常学习痛点的 AI 原生 Harness 产品。"
+    },
+    {
+      "id": "c19",
+      "node_id": "n5",
+      "concept": "证据时间点回链",
+      "statement": "最终结果不是聊天窗口，而是一个可浏览的知识树、可执行的学习路径和能跳回原视频时间点的证据链。用户可以看到每个阶段的状态、输入输出摘要和校验结果，这就是面向日常学习痛点的 AI 原生 Harness 产品。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 4,
+      "time": "5:00-6:00",
+      "start_time": 300.0,
+      "end_time": 360.0,
+      "raw_text": "最终结果不是聊天窗口，而是一个可浏览的知识树、可执行的学习路径和能跳回原视频时间点的证据链。用户可以看到每个阶段的状态、输入输出摘要和校验结果，这就是面向日常学习痛点的 AI 原生 Harness 产品。"
+    },
+    {
+      "id": "c20",
+      "node_id": "n6",
+      "concept": "学习路径生成",
+      "statement": "最终结果不是聊天窗口，而是一个可浏览的知识树、可执行的学习路径和能跳回原视频时间点的证据链。用户可以看到每个阶段的状态、输入输出摘要和校验结果，这就是面向日常学习痛点的 AI 原生 Harness 产品。",
+      "type": "explanation",
+      "confidence": 0.73,
+      "segment_index": 4,
+      "time": "5:00-6:00",
+      "start_time": 300.0,
+      "end_time": 360.0,
+      "raw_text": "最终结果不是聊天窗口，而是一个可浏览的知识树、可执行的学习路径和能跳回原视频时间点的证据链。用户可以看到每个阶段的状态、输入输出摘要和校验结果，这就是面向日常学习痛点的 AI 原生 Harness 产品。"
+    }
+  ],
+  "edges": [
+    {
+      "source": "n2",
+      "target": "n1",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n2",
+      "target": "n3",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n2",
+      "target": "n4",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n4",
+      "target": "n2",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n3",
+      "target": "n2",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n4",
+      "target": "n3",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n3",
+      "target": "n4",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n2",
+      "target": "n5",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n4",
+      "target": "n5",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n3",
+      "target": "n5",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n2",
+      "target": "n6",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n4",
+      "target": "n6",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n3",
+      "target": "n6",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n3",
+      "target": "n7",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n4",
+      "target": "n7",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n3",
+      "target": "n1",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n4",
+      "target": "n1",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    },
+    {
+      "source": "n2",
+      "target": "n7",
+      "type": "prerequisite_of",
+      "confidence": 0.68
+    }
+  ],
+  "evidence_links": [
+    {
+      "id": "e1",
+      "node_id": "n1",
+      "claim_id": "c1",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 0,
+      "start_time": 0.0,
+      "end_time": 70.0,
+      "time": "0:00-1:10",
+      "confidence": 0.76
+    },
+    {
+      "id": "e2",
+      "node_id": "n2",
+      "claim_id": "c2",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 0,
+      "start_time": 0.0,
+      "end_time": 70.0,
+      "time": "0:00-1:10",
+      "confidence": 0.73
+    },
+    {
+      "id": "e3",
+      "node_id": "n3",
+      "claim_id": "c3",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 0,
+      "start_time": 0.0,
+      "end_time": 70.0,
+      "time": "0:00-1:10",
+      "confidence": 0.73
+    },
+    {
+      "id": "e4",
+      "node_id": "n4",
+      "claim_id": "c4",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 0,
+      "start_time": 0.0,
+      "end_time": 70.0,
+      "time": "0:00-1:10",
+      "confidence": 0.73
+    },
+    {
+      "id": "e5",
+      "node_id": "n2",
+      "claim_id": "c5",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 1,
+      "start_time": 70.0,
+      "end_time": 145.0,
+      "time": "1:10-2:25",
+      "confidence": 0.73
+    },
+    {
+      "id": "e6",
+      "node_id": "n3",
+      "claim_id": "c6",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 1,
+      "start_time": 70.0,
+      "end_time": 145.0,
+      "time": "1:10-2:25",
+      "confidence": 0.76
+    },
+    {
+      "id": "e7",
+      "node_id": "n4",
+      "claim_id": "c7",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 1,
+      "start_time": 70.0,
+      "end_time": 145.0,
+      "time": "1:10-2:25",
+      "confidence": 0.73
+    },
+    {
+      "id": "e8",
+      "node_id": "n5",
+      "claim_id": "c8",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 1,
+      "start_time": 70.0,
+      "end_time": 145.0,
+      "time": "1:10-2:25",
+      "confidence": 0.73
+    },
+    {
+      "id": "e9",
+      "node_id": "n6",
+      "claim_id": "c9",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 1,
+      "start_time": 70.0,
+      "end_time": 145.0,
+      "time": "1:10-2:25",
+      "confidence": 0.73
+    },
+    {
+      "id": "e11",
+      "node_id": "n4",
+      "claim_id": "c11",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 2,
+      "start_time": 145.0,
+      "end_time": 220.0,
+      "time": "2:25-3:40",
+      "confidence": 0.76
+    },
+    {
+      "id": "e12",
+      "node_id": "n5",
+      "claim_id": "c12",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 2,
+      "start_time": 145.0,
+      "end_time": 220.0,
+      "time": "2:25-3:40",
+      "confidence": 0.73
+    },
+    {
+      "id": "e13",
+      "node_id": "n7",
+      "claim_id": "c13",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 3,
+      "start_time": 220.0,
+      "end_time": 300.0,
+      "time": "3:40-5:00",
+      "confidence": 0.76
+    },
+    {
+      "id": "e14",
+      "node_id": "n5",
+      "claim_id": "c14",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 3,
+      "start_time": 220.0,
+      "end_time": 300.0,
+      "time": "3:40-5:00",
+      "confidence": 0.73
+    },
+    {
+      "id": "e15",
+      "node_id": "n6",
+      "claim_id": "c15",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 3,
+      "start_time": 220.0,
+      "end_time": 300.0,
+      "time": "3:40-5:00",
+      "confidence": 0.73
+    },
+    {
+      "id": "e16",
+      "node_id": "n1",
+      "claim_id": "c16",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 4,
+      "start_time": 300.0,
+      "end_time": 360.0,
+      "time": "5:00-6:00",
+      "confidence": 0.73
+    },
+    {
+      "id": "e17",
+      "node_id": "n2",
+      "claim_id": "c17",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 4,
+      "start_time": 300.0,
+      "end_time": 360.0,
+      "time": "5:00-6:00",
+      "confidence": 0.73
+    },
+    {
+      "id": "e18",
+      "node_id": "n7",
+      "claim_id": "c18",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 4,
+      "start_time": 300.0,
+      "end_time": 360.0,
+      "time": "5:00-6:00",
+      "confidence": 0.73
+    },
+    {
+      "id": "e19",
+      "node_id": "n5",
+      "claim_id": "c19",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 4,
+      "start_time": 300.0,
+      "end_time": 360.0,
+      "time": "5:00-6:00",
+      "confidence": 0.73
+    },
+    {
+      "id": "e20",
+      "node_id": "n6",
+      "claim_id": "c20",
+      "bvid": "BVDEMOHARNESS01",
+      "segment_index": 4,
+      "start_time": 300.0,
+      "end_time": 360.0,
+      "time": "5:00-6:00",
+      "confidence": 0.73
+    }
+  ],
+  "generated_at": "2026-04-21T11:41:55.028008+00:00",
+  "graph_contract": "nodes + edges + evidence_links must be internally consistent",
+  "transcript_segments": [
+    {
+      "segment_index": 0,
+      "start_time": 0.0,
+      "end_time": 70.0,
+      "source_type": "sample_transcript",
+      "confidence": 0.98
+    },
+    {
+      "segment_index": 1,
+      "start_time": 70.0,
+      "end_time": 145.0,
+      "source_type": "sample_transcript",
+      "confidence": 0.98
+    },
+    {
+      "segment_index": 2,
+      "start_time": 145.0,
+      "end_time": 220.0,
+      "source_type": "sample_transcript",
+      "confidence": 0.96
+    },
+    {
+      "segment_index": 3,
+      "start_time": 220.0,
+      "end_time": 300.0,
+      "source_type": "sample_transcript",
+      "confidence": 0.97
+    },
+    {
+      "segment_index": 4,
+      "start_time": 300.0,
+      "end_time": 360.0,
+      "source_type": "sample_transcript",
+      "confidence": 0.97
+    }
+  ],
+  "projection": {
+    "root": "3 分钟理解 Harness Engineering：从 Prompt 到可验证 AI 工作流",
+    "node_count": 7,
+    "edge_count": 18,
+    "evidence_count": 19
+  }
+}

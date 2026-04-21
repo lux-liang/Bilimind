@@ -49,6 +49,9 @@ chroma_db/
 logs/
 *.log
 
+# 运行时产物（demo/sample_output 下保留一份可提交样例）
+artifacts/
+
 # 缓存
 .cache/
 *.cache

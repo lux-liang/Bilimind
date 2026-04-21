@@ -1,0 +1,19 @@
+{
+  "bvid": "BVDEMOHARNESS01",
+  "title": "3 分钟理解 Harness Engineering：从 Prompt 到可验证 AI 工作流",
+  "owner": "BiliMind Demo",
+  "duration": 360,
+  "source_url": "https://www.bilibili.com/video/BVDEMOHARNESS01",
+  "datasource": "sample",
+  "stage": "ingest",
+  "pipeline_version": "harness-0.1",
+  "tool_calls": [
+    {
+      "tool": "SampleHarnessTool.load_video",
+      "purpose": "read stable local video metadata for demo mode",
+      "source": "demo/sample_videos.json"
+    }
+  ],
+  "fallback_used": false,
+  "generated_at": "2026-04-21T11:41:55.025672+00:00"
+}

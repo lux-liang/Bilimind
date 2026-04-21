@@ -671,9 +671,13 @@ export const searchApi = {
 
 export interface CompileConcept {
   id: number;
+  node_id?: string;
   name: string;
   definition: string;
   difficulty: number;
+  confidence?: number;
+  source_count?: number;
+  review_status?: "verified" | "needs_review" | string;
   claims: CompileClaim[];
 }
 
@@ -686,6 +690,7 @@ export interface CompileClaim {
   start_time: number;
   end_time: number;
   raw_text: string;
+  review_status?: "verified" | "needs_review" | string;
 }
 
 export interface TimelineSegment {
@@ -694,14 +699,59 @@ export interface TimelineSegment {
   density: number;
   is_peak: boolean;
   concepts?: string[];
+  source_type?: string;
+  confidence?: number;
 }
 
 export interface CompileResult {
-  video: { bvid: string; title: string; duration: number };
+  video: { bvid: string; title: string; duration: number; source_url?: string };
   concepts: CompileConcept[];
   timeline: TimelineSegment[];
   prerequisites: Array<{ source: string; target: string; type: string }>;
   stats: { concept_count: number; claim_count: number; peak_count: number };
+  learning_path?: {
+    target: string;
+    mode: string;
+    total_steps: number;
+    steps: Array<{
+      order: number;
+      node_id: string;
+      title: string;
+      reason: string;
+      difficulty: number;
+      evidence_refs: string[];
+      status: string;
+    }>;
+  };
+  harness?: {
+    pipeline_version: string;
+    datasource: string;
+    transcript_source: string;
+    validation_passed: boolean;
+    artifact_dir?: string | null;
+    stages: Array<{
+      name: string;
+      status: string;
+      duration_ms: number;
+      input_summary: string;
+      output_summary: string;
+      warnings: string[];
+      artifact?: string | null;
+    }>;
+    validation?: {
+      passed: boolean;
+      checks: Array<{ name: string; passed: boolean }>;
+      errors: Array<{ code: string; message: string }>;
+      warnings: Array<{ code: string; message: string }>;
+      summary: {
+        error_count?: number;
+        warning_count?: number;
+        low_confidence_nodes?: number;
+        validated_evidence_links?: number;
+      };
+    };
+    stats?: Record<string, number>;
+  };
 }
 
 export interface EvidenceItem {
@@ -830,6 +880,18 @@ export const compileApi = {
     const sid = getSessionId();
     if (sid) params.set("session_id", sid);
     return request<CompileResult>(`/compile/result/${bvid}?${params.toString()}`);
+  },
+  runDemo: () => {
+    const sid = getSessionId() || "demo-session";
+    return request<CompileResult>("/compile/demo", {
+      method: "POST",
+      body: JSON.stringify({
+        bvid: "BVDEMOHARNESS01",
+        session_id: sid,
+        datasource: "sample",
+        transcript_source: "sample",
+      }),
+    });
   },
 };
 

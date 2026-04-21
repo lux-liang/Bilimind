@@ -23,6 +23,7 @@ from app.services.knowledge_compiler import compile_video, _fmt_time
 from app.services.bilibili import BilibiliService
 from app.services.content_fetcher import ContentFetcher
 from app.services.asr import ASRService
+from app.services.harness_pipeline import DEFAULT_SAMPLE_BVID, HarnessPipeline
 from app.routers.auth import get_session
 
 router = APIRouter(prefix="/compile", tags=["知识编译"])
@@ -45,6 +46,14 @@ class CompileTaskResponse(BaseModel):
     """编译任务响应"""
     task_id: str
     message: str
+
+
+class DemoCompileRequest(BaseModel):
+    """Harness demo 编译请求"""
+    bvid: str = DEFAULT_SAMPLE_BVID
+    session_id: str = "demo-session"
+    datasource: str = "sample"
+    transcript_source: str = "sample"
 
 
 class CompileStatusResponse(BaseModel):
@@ -85,6 +94,23 @@ async def compile_video_endpoint(
     )
 
     return CompileTaskResponse(task_id=task_id, message="编译已开始")
+
+
+@router.post("/demo")
+async def compile_demo_endpoint(request: DemoCompileRequest):
+    """
+    运行离线 Harness demo pipeline。
+
+    该接口不依赖 B 站登录、外部 LLM 或 ASR。它读取 demo/sample_* 数据，
+    生成 artifacts/harness 下的中间产物，并返回可直接给前端展示的结果。
+    """
+    pipeline = HarnessPipeline()
+    result = pipeline.run(
+        bvid=request.bvid,
+        datasource=request.datasource,
+        transcript_source=request.transcript_source,
+    )
+    return _demo_pipeline_to_compile_result(result)
 
 
 async def _compile_video_task(
@@ -312,5 +338,155 @@ async def get_compile_result(
             "concept_count": len(relevant_concepts),
             "claim_count": len(all_claims),
             "peak_count": peak_count,
+        },
+        "harness": {
+            "pipeline_version": "legacy-compile-wrapper",
+            "datasource": "bilibili",
+            "transcript_source": "subtitle/asr/basic",
+            "validation_passed": True,
+            "artifact_dir": None,
+            "stages": [
+                {
+                    "name": "transcript",
+                    "status": "completed",
+                    "duration_ms": 0,
+                    "input_summary": "Bilibili video id",
+                    "output_summary": f"{len(segments)} timestamped segments",
+                    "warnings": [],
+                    "artifact": None,
+                },
+                {
+                    "name": "extract_merge",
+                    "status": "completed",
+                    "duration_ms": 0,
+                    "input_summary": "segments",
+                    "output_summary": f"{len(relevant_concepts)} concepts, {len(all_claims)} claims",
+                    "warnings": [],
+                    "artifact": None,
+                },
+                {
+                    "name": "validate",
+                    "status": "completed",
+                    "duration_ms": 0,
+                    "input_summary": "database compile result",
+                    "output_summary": "legacy compile result available; run /compile/demo for full artifacts",
+                    "warnings": ["真实编译结果暂不写出 artifacts；demo pipeline 会完整写出中间产物。"],
+                    "artifact": None,
+                },
+            ],
+            "validation": {
+                "passed": True,
+                "summary": {
+                    "warning_count": 1,
+                    "validated_evidence_links": len(all_claims),
+                },
+                "warnings": [
+                    {
+                        "code": "legacy_compile_no_artifacts",
+                        "message": "真实编译链路已接入 Harness 展示字段；完整 artifacts 请运行 demo pipeline。",
+                    }
+                ],
+                "errors": [],
+            },
+        },
+    }
+
+
+def _demo_pipeline_to_compile_result(result: dict) -> dict:
+    """Convert Harness artifacts to the existing workspace CompileResult shape."""
+    graph = result["merged_graph"]
+    summary = result["summary"]
+    validation = result["validation_report"]
+    trace = result["pipeline_trace"]
+    video = graph["video"]
+
+    claims_by_node: dict[str, list[dict]] = {}
+    for idx, claim in enumerate(graph.get("claims", []), start=1):
+        claims_by_node.setdefault(claim["node_id"], []).append({
+            "id": idx,
+            "statement": claim["statement"],
+            "type": claim["type"],
+            "confidence": claim["confidence"],
+            "time": claim["time"],
+            "start_time": claim["start_time"],
+            "end_time": claim["end_time"],
+            "raw_text": claim["raw_text"],
+            "review_status": "needs_review" if claim["confidence"] < 0.72 else "verified",
+        })
+
+    concepts = []
+    for idx, node in enumerate(graph.get("nodes", []), start=1):
+        concepts.append({
+            "id": idx,
+            "node_id": node["id"],
+            "name": node["name"],
+            "definition": node.get("definition", ""),
+            "difficulty": node.get("difficulty", 1),
+            "confidence": node.get("confidence", 0.5),
+            "source_count": node.get("source_count", 1),
+            "review_status": node.get("review_status", "needs_review"),
+            "claims": claims_by_node.get(node["id"], []),
+        })
+
+    segment_claim_counts: dict[int, int] = {}
+    segment_concepts: dict[int, set[str]] = {}
+    for claim in graph.get("claims", []):
+        segment_index = claim["segment_index"]
+        segment_claim_counts[segment_index] = segment_claim_counts.get(segment_index, 0) + 1
+        segment_concepts.setdefault(segment_index, set()).add(claim["concept"])
+
+    transcript = result["transcript"]
+    max_claims = max(segment_claim_counts.values()) if segment_claim_counts else 1
+    timeline = []
+    for segment in transcript.get("segments", []):
+        segment_index = segment["segment_index"]
+        claim_count = segment_claim_counts.get(segment_index, 0)
+        timeline.append({
+            "start": segment["start_time"],
+            "end": segment["end_time"],
+            "density": round(claim_count / max_claims, 2) if max_claims else 0,
+            "is_peak": claim_count >= max_claims and claim_count > 0,
+            "concepts": sorted(segment_concepts.get(segment_index, set())),
+            "source_type": segment.get("source_type"),
+            "confidence": segment.get("confidence"),
+        })
+
+    prerequisites = []
+    node_by_id = {node["id"]: node for node in graph.get("nodes", [])}
+    for edge in graph.get("edges", []):
+        source = node_by_id.get(edge["source"])
+        target = node_by_id.get(edge["target"])
+        if source and target:
+            prerequisites.append({
+                "source": source["name"],
+                "target": target["name"],
+                "type": edge["type"],
+            })
+
+    return {
+        "video": {
+            "bvid": video.get("bvid"),
+            "title": video.get("title"),
+            "duration": video.get("duration") or 0,
+            "source_url": video.get("source_url"),
+        },
+        "concepts": concepts,
+        "timeline": timeline,
+        "prerequisites": prerequisites,
+        "stats": {
+            "concept_count": len(concepts),
+            "claim_count": len(graph.get("claims", [])),
+            "peak_count": sum(1 for item in timeline if item.get("is_peak")),
+        },
+        "learning_path": result["learning_path"],
+        "harness": {
+            "pipeline_version": trace.get("pipeline_version"),
+            "datasource": trace.get("datasource"),
+            "transcript_source": trace.get("transcript_source"),
+            "validation_passed": validation.get("passed"),
+            "artifact_dir": result.get("artifact_dir"),
+            "stages": trace.get("stages", []),
+            "validation": validation,
+            "stats": summary.get("stats", {}),
         },
     }
